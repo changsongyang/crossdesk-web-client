@@ -4,6 +4,7 @@ const elements = {
   dataChannelState: document.getElementById("datachannel-state"),
   displaySelect: document.getElementById("display-id"),
   connectBtn: document.getElementById("connect"),
+  retrySignalingBtn: document.getElementById("retry-signaling"),
   disconnectBtn: document.getElementById("disconnect"),
   media: document.getElementById("media"),
   video: document.getElementById("video"),
@@ -30,6 +31,8 @@ const DEFAULT_CONFIG = {
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
   reconnectDelayMs: 2000,
+  reconnectMaxDelayMs: 30000,
+  reconnectMaxAttempts: 8,
   clientTag: "web",
 };
 const CONFIG = Object.assign({}, DEFAULT_CONFIG, window.CROSSDESK_CONFIG || {});
@@ -37,45 +40,203 @@ const CONFIG = Object.assign({}, DEFAULT_CONFIG, window.CROSSDESK_CONFIG || {});
 const control = window.CrossDeskControl;
 let pc = null;
 let clientId = "000000";
+let websocket = null;
 let heartbeatTimer = null;
+let reconnectTimer = null;
+let reconnectAttempt = 0;
 let lastPongAt = Date.now();
 let trackIndex = 0; // Track index for display_id (0, 1, 2, ...)
 const trackMap = new Map(); // Map<index, track> - stores tracks by their display_id index
 
-const websocket = new WebSocket(CONFIG.signalingUrl);
+const SignalingConnectionState = Object.freeze({
+  connecting: "connecting",
+  connected: "connected",
+  reconnecting: "reconnecting",
+  disconnected: "disconnected",
+});
+let signalingConnectionState = SignalingConnectionState.disconnected;
+const RECONNECT_BASE_DELAY_MS = Math.max(
+  500,
+  Number(CONFIG.reconnectDelayMs) || 1000
+);
+const RECONNECT_MAX_DELAY_MS = Math.max(
+  RECONNECT_BASE_DELAY_MS,
+  Number(CONFIG.reconnectMaxDelayMs) || 30000
+);
+const RECONNECT_MAX_ATTEMPTS = Number.isFinite(Number(CONFIG.reconnectMaxAttempts))
+  ? Math.max(1, Number(CONFIG.reconnectMaxAttempts))
+  : 8;
 
-websocket.addEventListener("message", (event) => {
-  if (typeof event.data !== "string") return;
-  const message = JSON.parse(event.data);
+function isSignalingOpen() {
+  return !!websocket && websocket.readyState === WebSocket.OPEN;
+}
 
-  if (message.type === "pong") {
-    lastPongAt = Date.now();
+function sendSignaling(payload) {
+  if (!isSignalingOpen()) return false;
+  try {
+    websocket.send(
+      typeof payload === "string" ? payload : JSON.stringify(payload)
+    );
+    return true;
+  } catch (err) {
+    console.error("Failed to send signaling message", err);
+    return false;
+  }
+}
+
+function setSignalingConnectionState(nextState, meta = {}) {
+  signalingConnectionState = nextState;
+
+  let signalingText = nextState;
+  if (
+    nextState === SignalingConnectionState.reconnecting &&
+    typeof meta.attempt === "number"
+  ) {
+    signalingText = `reconnecting(${meta.attempt}/${RECONNECT_MAX_ATTEMPTS})`;
+  }
+  updateStatus(elements.signalingState, signalingText);
+
+  enableConnectButton(nextState === SignalingConnectionState.connected);
+
+  if (elements.retrySignalingBtn) {
+    const showRetry =
+      nextState === SignalingConnectionState.reconnecting ||
+      nextState === SignalingConnectionState.disconnected;
+    elements.retrySignalingBtn.style.display = showRetry ? "inline-block" : "none";
+    elements.retrySignalingBtn.disabled = false;
+  }
+}
+
+function connectSignaling(isReconnect = false) {
+  stopHeartbeat();
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  const previousSocket = websocket;
+  if (previousSocket) {
+    websocket = null;
+    try {
+      previousSocket.close();
+    } catch (err) {}
+  }
+
+  setSignalingConnectionState(
+    isReconnect
+      ? SignalingConnectionState.reconnecting
+      : SignalingConnectionState.connecting
+  );
+
+  let socket;
+  try {
+    socket = new WebSocket(CONFIG.signalingUrl);
+  } catch (err) {
+    console.error("Failed to create signaling websocket", err);
+    scheduleReconnect("socket_create_failed");
     return;
   }
 
-  handleSignalingMessage(message);
-});
+  websocket = socket;
 
-websocket.addEventListener("open", () => {
-  enableConnectButton(true);
-  sendLogin();
-  startHeartbeat();
-});
+  socket.addEventListener("message", (event) => {
+    if (socket !== websocket) return;
+    if (typeof event.data !== "string") return;
 
-websocket.addEventListener("close", () => {
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch (err) {
+      console.warn("Invalid signaling message", err);
+      return;
+    }
+
+    if (message.type === "pong") {
+      lastPongAt = Date.now();
+      return;
+    }
+
+    handleSignalingMessage(message);
+  });
+
+  socket.addEventListener("open", () => {
+    if (socket !== websocket) return;
+    reconnectAttempt = 0;
+    setSignalingConnectionState(SignalingConnectionState.connected);
+    sendLogin();
+    startHeartbeat();
+  });
+
+  socket.addEventListener("close", () => {
+    if (socket !== websocket) return;
+    websocket = null;
+    stopHeartbeat();
+    scheduleReconnect("socket_closed");
+  });
+
+  socket.addEventListener("error", () => {
+    if (socket !== websocket) return;
+    scheduleReconnect("socket_error");
+  });
+}
+
+function getNextReconnectDelayMs(nextAttempt) {
+  return Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_BASE_DELAY_MS * Math.pow(2, Math.max(0, nextAttempt - 1))
+  );
+}
+
+function scheduleReconnect(reason = "unknown") {
+  if (reconnectTimer) return;
+
   stopHeartbeat();
-  enableConnectButton(false);
-});
 
-websocket.addEventListener("error", () => {
-  stopHeartbeat();
-  scheduleReconnect();
-});
+  if (reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
+    setSignalingConnectionState(SignalingConnectionState.disconnected, {
+      reason,
+    });
+    return;
+  }
+
+  const nextAttempt = reconnectAttempt + 1;
+  const delayMs = getNextReconnectDelayMs(nextAttempt);
+  setSignalingConnectionState(SignalingConnectionState.reconnecting, {
+    reason,
+    attempt: nextAttempt,
+    delayMs,
+  });
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    reconnectAttempt = nextAttempt;
+    connectSignaling(true);
+  }, delayMs);
+}
+
+function triggerReconnect(reason) {
+  scheduleReconnect(reason);
+  const socket = websocket;
+  if (!socket) return;
+  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+    try {
+      socket.close();
+    } catch (err) {}
+  }
+}
+
+function retrySignalingNow() {
+  reconnectAttempt = 0;
+  connectSignaling(true);
+}
 
 function handleSignalingMessage(message) {
   switch (message.type) {
     case "login":
-      clientId = message.user_id.split("@")[0];
+      if (typeof message.user_id === "string") {
+        clientId = message.user_id.split("@")[0];
+      }
       break;
     case "user_join_transmission":
       // Handle join transmission response
@@ -125,11 +286,9 @@ function startHeartbeat() {
   stopHeartbeat();
   lastPongAt = Date.now();
   heartbeatTimer = setInterval(() => {
-    if (websocket.readyState === WebSocket.OPEN) {
-      websocket.send(JSON.stringify({ type: "ping", ts: Date.now() }));
-    }
+    sendSignaling({ type: "ping", ts: Date.now() });
     if (Date.now() - lastPongAt > CONFIG.heartbeatTimeoutMs) {
-      scheduleReconnect();
+      triggerReconnect("heartbeat_timeout");
     }
   }, CONFIG.heartbeatIntervalMs);
 }
@@ -140,16 +299,11 @@ function stopHeartbeat() {
   heartbeatTimer = null;
 }
 
-function scheduleReconnect() {
-  try {
-    websocket.close();
-  } catch (err) {}
-  setTimeout(() => window.location.reload(), CONFIG.reconnectDelayMs);
+function sendLogin() {
+  sendSignaling({ type: "login", user_id: CONFIG.clientTag });
 }
 
-function sendLogin() {
-  websocket.send(JSON.stringify({ type: "login", user_id: CONFIG.clientTag }));
-}
+connectSignaling(false);
 
 function handleOffer(offer) {
   pc = createPeerConnection();
@@ -208,16 +362,14 @@ function createPeerConnection() {
 
   peer.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
-    websocket.send(
-      JSON.stringify({
-        type: "new_candidate_mid",
-        transmission_id: getTransmissionId(),
-        user_id: clientId,
-        remote_user_id: getTransmissionId(),
-        candidate: candidate.candidate,
-        mid: candidate.sdpMid,
-      })
-    );
+    sendSignaling({
+      type: "new_candidate_mid",
+      transmission_id: getTransmissionId(),
+      user_id: clientId,
+      remote_user_id: getTransmissionId(),
+      candidate: candidate.candidate,
+      mid: candidate.sdpMid,
+    });
   };
 
   peer.ontrack = ({ track, streams }) => {
@@ -325,15 +477,13 @@ function bindDataChannel(channel) {
 async function sendAnswer(peer) {
   await peer.setLocalDescription(await peer.createAnswer());
   await waitIceGathering(peer);
-  websocket.send(
-    JSON.stringify({
-      type: "answer",
-      transmission_id: getTransmissionId(),
-      user_id: clientId,
-      remote_user_id: getTransmissionId(),
-      sdp: peer.localDescription.sdp,
-    })
-  );
+  sendSignaling({
+    type: "answer",
+    transmission_id: getTransmissionId(),
+    user_id: clientId,
+    remote_user_id: getTransmissionId(),
+    sdp: peer.localDescription.sdp,
+  });
 }
 
 function waitIceGathering(peer) {
@@ -356,27 +506,27 @@ function getTransmissionPwd() {
 }
 
 function sendJoinRequest() {
-  websocket.send(
-    JSON.stringify({
-      type: "join_transmission",
-      user_id: clientId,
-      transmission_id: `${getTransmissionId()}@${getTransmissionPwd()}`,
-    })
-  );
+  return sendSignaling({
+    type: "join_transmission",
+    user_id: clientId,
+    transmission_id: `${getTransmissionId()}@${getTransmissionPwd()}`,
+  });
 }
 
 function sendLeaveRequest() {
-  websocket.send(
-    JSON.stringify({
-      type: "user_leave_transmission",
-      user_id: clientId,
-      transmission_id: getTransmissionId(),
-    })
-  );
+  return sendSignaling({
+    type: "user_leave_transmission",
+    user_id: clientId,
+    transmission_id: getTransmissionId(),
+  });
 }
 
 function connect() {
   if (!elements.connectBtn || !elements.disconnectBtn || !elements.media) return;
+  if (!isSignalingOpen()) {
+    triggerReconnect("connect_without_signaling");
+    return;
+  }
   elements.connectBtn.style.display = "none";
   elements.disconnectBtn.style.display = "inline-block";
   elements.media.style.display = "flex";
@@ -404,7 +554,10 @@ function connect() {
   if (elements.connectingMessageText) {
     elements.connectingMessageText.textContent = "连接中...";
   }
-  sendJoinRequest();
+  if (!sendJoinRequest()) {
+    triggerReconnect("join_send_failed");
+    disconnect();
+  }
 }
 
 function disconnect() {
@@ -593,6 +746,10 @@ if (elements.disconnectBtn) {
 
 if (elements.disconnectConnected) {
   elements.disconnectConnected.addEventListener("click", disconnect);
+}
+
+if (elements.retrySignalingBtn) {
+  elements.retrySignalingBtn.addEventListener("click", retrySignalingNow);
 }
 
 if (elements.displaySelect) {
@@ -1294,4 +1451,3 @@ document.addEventListener("dragstart", (event) => {
   event.preventDefault();
   return false;
 });
-
