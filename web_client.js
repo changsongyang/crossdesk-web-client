@@ -89,6 +89,32 @@ function sendSignaling(payload) {
   }
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseSignalingMessage(rawData) {
+  let message;
+  try {
+    message = JSON.parse(rawData);
+  } catch (err) {
+    console.warn("Invalid signaling message JSON", err);
+    return null;
+  }
+
+  if (!isPlainObject(message)) {
+    console.warn("Invalid signaling message payload type");
+    return null;
+  }
+
+  if (typeof message.type !== "string" || message.type.length === 0) {
+    console.warn("Invalid signaling message type");
+    return null;
+  }
+
+  return message;
+}
+
 function updateConnectAvailability() {
   const canConnect =
     signalingConnectionState === SignalingConnectionState.connected && isLoggedIn;
@@ -177,13 +203,8 @@ function connectSignaling(isReconnect = false) {
     if (socket !== websocket) return;
     if (typeof event.data !== "string") return;
 
-    let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch (err) {
-      console.warn("Invalid signaling message", err);
-      return;
-    }
+    const message = parseSignalingMessage(event.data);
+    if (!message) return;
 
     if (message.type === "pong") {
       lastPongAt = Date.now();
@@ -265,16 +286,27 @@ function retrySignalingNow() {
 }
 
 function handleSignalingMessage(message) {
+  if (!isPlainObject(message) || typeof message.type !== "string") {
+    return;
+  }
+
   switch (message.type) {
     case "login":
-      if (typeof message.user_id === "string" && message.user_id.length > 0) {
-        clientId = message.user_id.split("@")[0];
+      if (typeof message.user_id === "string" && message.user_id.trim().length > 0) {
+        const nextClientId = message.user_id.trim().split("@")[0];
+        if (!nextClientId) {
+          console.warn("Invalid login message user_id");
+          break;
+        }
+        clientId = nextClientId;
         isLoggedIn = true;
         if (connectHintTimer) {
           clearTimeout(connectHintTimer);
           connectHintTimer = null;
         }
         updateConnectAvailability();
+      } else {
+        console.warn("Invalid login message: missing user_id");
       }
       break;
     case "user_join_transmission":
@@ -305,15 +337,39 @@ function handleSignalingMessage(message) {
       }
       break;
     case "offer":
-      handleOffer(message);
+      if (typeof message.sdp !== "string" || message.sdp.length === 0) {
+        console.warn("Invalid offer message: missing sdp");
+        break;
+      }
+      handleOffer({ type: "offer", sdp: message.sdp });
       break;
     case "new_candidate_mid":
       if (!pc) return;
+      if (typeof message.candidate !== "string" || message.candidate.length === 0) {
+        console.warn("Invalid ICE candidate message: missing candidate");
+        break;
+      }
+      const candidateInit = {
+        candidate: message.candidate,
+      };
+      if (typeof message.mid === "string" && message.mid.length > 0) {
+        candidateInit.sdpMid = message.mid;
+      }
+      if (
+        Number.isInteger(message.sdpMLineIndex) &&
+        message.sdpMLineIndex >= 0
+      ) {
+        candidateInit.sdpMLineIndex = message.sdpMLineIndex;
+      }
+      if (
+        typeof candidateInit.sdpMid !== "string" &&
+        !Number.isInteger(candidateInit.sdpMLineIndex)
+      ) {
+        console.warn("Invalid ICE candidate message: missing mid and sdpMLineIndex");
+        break;
+      }
       pc.addIceCandidate(
-        new RTCIceCandidate({
-          sdpMid: message.mid,
-          candidate: message.candidate,
-        })
+        new RTCIceCandidate(candidateInit)
       ).catch((err) => console.error("Error adding ICE candidate", err));
       break;
     default:
