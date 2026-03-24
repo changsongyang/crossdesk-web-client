@@ -1,7 +1,4 @@
 const elements = {
-  iceState: document.getElementById("ice-connection-state"),
-  signalingState: document.getElementById("signaling-state"),
-  dataChannelState: document.getElementById("datachannel-state"),
   displaySelect: document.getElementById("display-id"),
   connectBtn: document.getElementById("connect"),
   retrySignalingBtn: document.getElementById("retry-signaling"),
@@ -140,17 +137,8 @@ function showConnectInitializingHint() {
   }, 1500);
 }
 
-function setSignalingConnectionState(nextState, meta = {}) {
+function setSignalingConnectionState(nextState) {
   signalingConnectionState = nextState;
-
-  let signalingText = nextState;
-  if (
-    nextState === SignalingConnectionState.reconnecting &&
-    typeof meta.attempt === "number"
-  ) {
-    signalingText = `reconnecting(${meta.attempt}/${RECONNECT_MAX_ATTEMPTS})`;
-  }
-  updateStatus(elements.signalingState, signalingText);
 
   updateConnectAvailability();
 
@@ -251,19 +239,13 @@ function scheduleReconnect(reason = "unknown") {
   stopHeartbeat();
 
   if (reconnectAttempt >= RECONNECT_MAX_ATTEMPTS) {
-    setSignalingConnectionState(SignalingConnectionState.disconnected, {
-      reason,
-    });
+    setSignalingConnectionState(SignalingConnectionState.disconnected);
     return;
   }
 
   const nextAttempt = reconnectAttempt + 1;
   const delayMs = getNextReconnectDelayMs(nextAttempt);
-  setSignalingConnectionState(SignalingConnectionState.reconnecting, {
-    reason,
-    attempt: nextAttempt,
-    delayMs,
-  });
+  setSignalingConnectionState(SignalingConnectionState.reconnecting);
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
@@ -420,7 +402,6 @@ function createPeerConnection() {
 
   peer.addEventListener("iceconnectionstatechange", () => {
     const state = peer.iceConnectionState;
-    updateStatus(elements.iceState, state);
     // Update status LED: connected when ICE state is "connected"
     const isConnected = state === "connected";
     updateStatusLed(elements.connectionStatusLed, isConnected, true);
@@ -448,15 +429,9 @@ function createPeerConnection() {
       }
     }
   });
-  updateStatus(elements.iceState, peer.iceConnectionState);
   const isConnected = peer.iceConnectionState === "connected";
   updateStatusLed(elements.connectionStatusLed, isConnected, true);
   updateStatusLed(elements.connectedStatusLed, isConnected, false);
-
-  peer.addEventListener("signalingstatechange", () => {
-    updateStatus(elements.signalingState, peer.signalingState);
-  });
-  updateStatus(elements.signalingState, peer.signalingState);
 
   peer.onicecandidate = ({ candidate }) => {
     if (!candidate) return;
@@ -557,12 +532,10 @@ function createPeerConnection() {
 
 function bindDataChannel(channel) {
   channel.addEventListener("open", () => {
-    updateStatus(elements.dataChannelState, "open");
     enableDataChannelUi(true);
   });
 
   channel.addEventListener("close", () => {
-    updateStatus(elements.dataChannelState, "closed");
     enableDataChannelUi(false);
     control.setDataChannel(null);
   });
@@ -696,9 +669,6 @@ function disconnect() {
   sendLeaveRequest();
   teardownPeerConnection();
   enableDataChannelUi(false);
-  updateStatus(elements.iceState, "");
-  updateStatus(elements.signalingState, "");
-  updateStatus(elements.dataChannelState, "closed");
   // Reset track index and clear display select options
   trackIndex = 0;
   trackMap.clear();
@@ -767,11 +737,6 @@ function teardownPeerConnection() {
     elements.audio.srcObject.getTracks().forEach((track) => track.stop());
     elements.audio.srcObject = null;
   }
-}
-
-function updateStatus(element, value) {
-  if (!element) return;
-  element.textContent = value || "";
 }
 
 // Update status LED indicator

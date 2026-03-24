@@ -42,14 +42,11 @@
         virtualRightBtn: document.getElementById("virtual-right-btn"),
         virtualScrollUp: document.getElementById("virtual-scroll-up"),
         virtualScrollDown: document.getElementById("virtual-scroll-down"),
-        virtualTouchpad: null,
-        virtualDragHandle: document.getElementById("virtual-mouse-drag-handle"),
         mobileModeSelector: document.getElementById("mobile-mode-selector"),
         mouseControlMode: document.getElementById("mouse-control-mode"),
         virtualKeyboard: document.getElementById("virtual-keyboard"),
         keyboardHeader: document.getElementById("keyboard-header"),
         keyboardToggleMouse: document.getElementById("keyboard-toggle-mouse"),
-        keyboardToggle: document.getElementById("keyboard-toggle"),
         keyboardClose: document.getElementById("keyboard-close"),
         virtualMouseMinimize: document.getElementById("virtual-mouse-minimize"),
         virtualMouseRestore: document.getElementById("virtual-mouse-restore"),
@@ -63,7 +60,6 @@
         normalizedPos: { x: 0.5, y: 0.5 },
         lastPointerPos: null,
         lastWheelAt: 0,
-        touchpadStart: null,
         draggingVirtualMouse: false,
         dragOffset: { x: 0, y: 0 },
         draggingVirtualKeyboard: false,
@@ -885,12 +881,6 @@
       }
 
       // Keyboard header buttons
-      if (this.elements.keyboardToggle) {
-        this.elements.keyboardToggle.addEventListener("click", () => {
-          this.toggleVirtualKeyboard();
-        });
-      }
-
       if (this.elements.keyboardClose) {
         this.elements.keyboardClose.addEventListener("click", () => {
           this.hideVirtualKeyboard();
