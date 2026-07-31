@@ -687,7 +687,10 @@ function waitIceGathering(peer) {
 }
 
 function getTransmissionId() {
-  return document.getElementById("transmission-id").value.trim();
+  const transmissionIdInput = document.getElementById("transmission-id");
+  const normalizedId = transmissionIdInput.value.replace(/\s+/g, "");
+  transmissionIdInput.value = normalizedId;
+  return normalizedId;
 }
 
 function getTransmissionPwd() {
