@@ -478,10 +478,13 @@ video {
 }
 
 .connected-panel {
-  background: rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(10px);
-  border: none;
-  padding: 12px 16px;
+  width: 296px;
+  max-width: 100vw;
+  background: rgba(17, 24, 39, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 10px 12px;
   pointer-events: auto;
   position: fixed;
   top: 0;
@@ -491,8 +494,8 @@ video {
   transform: translateY(0);
   opacity: 1;
   cursor: default;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  border-radius: 24px; /* Same radius as minimized button (48px / 2 = 24px) */
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+  border-radius: 18px;
   /* Note: position: fixed is needed for panel positioning, icon uses absolute positioning relative to this */
 }
 
@@ -519,8 +522,7 @@ video {
 
 .panel-content {
   display: block;
-  padding-left: 72px; /* Make room for the icon on the left */
-  padding-right: 16px; /* Match panel's right padding */
+  padding-left: 28px;
 }
 
 .panel-collapsed-bar {
@@ -529,31 +531,41 @@ video {
   justify-content: center;
   background: #ffffff;
   backdrop-filter: blur(10px);
-  padding: 10px;
+  padding: 8px;
   border-radius: 50%;
   border: none;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.22);
+  cursor: grab;
+  touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
   -webkit-touch-callout: none;
-  width: 56px;
-  height: 56px;
-  min-width: 56px;
-  max-width: 56px;
-  min-height: 56px;
-  max-height: 56px;
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  min-height: 48px;
+  max-height: 48px;
   position: absolute;
-  top: 0;
-  left: 0;
+  top: -1px;
+  left: -1px;
   z-index: 300;
   pointer-events: auto;
 }
 
 .panel-collapsed-bar:hover {
-  background: #ffffff;
+  background: #f8fafc;
+}
+
+.panel-collapsed-bar:active {
+  cursor: grabbing;
+}
+
+.connected-panel.minimized .panel-collapsed-bar {
+  top: 0;
+  left: 0;
 }
 
 .collapsed-bar-text {
@@ -564,8 +576,8 @@ video {
 }
 
 .collapsed-bar-icon {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   object-fit: contain;
   display: block;
   user-select: none;
@@ -584,109 +596,85 @@ video {
 .connected-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 16px;
 }
 
 .connected-controls-row {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   flex: 1;
   width: 100%;
-  justify-content: flex-end;
   box-sizing: border-box;
 }
 
 /* Ensure all controls have consistent height and alignment */
 .connected-controls-row > * {
-  height: 36px;
+  height: 40px;
   display: flex;
   align-items: center;
-}
-
-/* When space is limited or in landscape orientation, switch to vertical layout */
-@media (max-width: 900px), (orientation: landscape) {
-  .connected-controls-row {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-  
-  .connected-controls-row .option.compact {
-    width: 100%;
-  }
-  
-  .controls-right-group {
-    width: 100%;
-    margin-left: 0;
-    justify-content: center;
-  }
-  
-  .connected-controls-row .connection-status-group {
-    width: auto;
-    justify-content: center;
-  }
-  
-  .connected-controls-row .disconnect-btn {
-    width: auto;
-    min-width: auto;
-  }
-  
-  .connected-controls-row .minimize-btn {
-    width: 28px;
-    min-width: 28px;
-  }
 }
 
 .connected-header .option.compact {
   margin-bottom: 0;
   flex-shrink: 0;
-  height: 36px;
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 8px; /* Ensure consistent gap between label and select */
+  gap: 8px;
 }
 
 .connected-header .option.compact label {
   margin-bottom: 0;
   height: auto;
-  line-height: 36px;
-  min-width: 60px;
+  line-height: 40px;
+  min-width: 44px;
   text-align: right;
+  color: #cbd5e1;
+  font-size: 13px;
 }
 
 .connected-header .option.compact select {
-  height: 36px;
+  height: 40px;
   box-sizing: border-box;
-  width: 110px;
-  min-width: 110px;
-  max-width: 110px; /* Ensure fixed width */
-  border: 1px solid rgba(0, 0, 0, 0.2);
-  padding: 0 8px;
+  width: clamp(132px, 16vw, 180px);
+  min-width: 132px;
+  max-width: 180px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #1f2937;
   margin: 0;
-  margin-right: 0; /* Ensure no right margin */
-  flex-shrink: 0; /* Prevent shrinking */
+  flex-shrink: 0;
+}
+
+.connected-header .option.compact select:disabled {
+  background: rgba(255, 255, 255, 0.88);
+  color: #64748b;
+  opacity: 1;
 }
 
 /* Left side: options (画面 and 鼠标模式) */
 .connected-controls-row .option.compact {
   flex-shrink: 0;
-  /* Ensure select box right edge aligns with disconnect button */
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  width: 100%;
 }
 
 /* Right side: status and buttons */
 .controls-right-group {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex-shrink: 0;
   margin-left: 0;
-  height: 36px;
-  /* Ensure disconnect button right edge aligns with select box */
+  height: 40px;
+  width: 100%;
+  justify-content: flex-end;
   position: relative;
 }
 
@@ -697,6 +685,11 @@ video {
 }
 
 .connected-controls-row .disconnect-btn {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.connected-controls-row .audio-toggle-btn {
   flex-shrink: 0;
   margin: 0;
 }
@@ -732,13 +725,12 @@ video {
 .connection-status-group {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(0, 0, 0, 0.05);
-  backdrop-filter: blur(10px);
-  padding: 0 8px;
-  border-radius: 4px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  height: 36px;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  height: 40px;
   box-sizing: border-box;
   min-width: auto;
   justify-content: center;
@@ -746,7 +738,7 @@ video {
 }
 
 .connection-status-label {
-  color: #333;
+  color: #e5e7eb;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
@@ -756,20 +748,35 @@ video {
   flex-shrink: 0;
 }
 
+.connected-panel .status-led {
+  width: 10px;
+  height: 10px;
+}
+
+.connected-panel .status-led-on {
+  background-color: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
+}
+
+.connected-panel .status-led-off {
+  background-color: #fb7185;
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.16);
+}
+
 /* Disconnect button (now inside panel) */
 .disconnect-btn {
-  padding: 0 12px;
-  background-color: var(--danger-color);
+  padding: 0 14px;
+  background-color: #ef4444;
   color: white;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  height: 36px;
+  height: 40px;
   min-width: auto;
   transition: background-color 0.2s;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
   white-space: nowrap;
   box-sizing: border-box;
   display: flex;
@@ -781,11 +788,176 @@ video {
   }
   
 .disconnect-btn:hover {
-  background-color: var(--danger-hover-color);
+  background-color: #dc2626;
 }
 
 .disconnect-btn:active {
   transform: translateY(0);
+}
+
+.audio-toggle-btn {
+  padding: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: #e5e7eb;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  height: 40px;
+  width: 40px;
+  min-width: 40px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  box-shadow: none;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.audio-toggle-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.audio-toggle-btn[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+
+.audio-toggle-btn[aria-pressed="true"]:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #cbd5e1;
+}
+
+.audio-toggle-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.audio-icon-speaker {
+  fill: currentColor;
+  stroke: none;
+}
+
+.audio-icon-volume,
+.audio-icon-mute {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.audio-icon-volume {
+  display: none;
+}
+
+.audio-toggle-btn.audio-is-playing .audio-icon-volume {
+  display: block;
+}
+
+.audio-toggle-btn.audio-is-playing .audio-icon-mute {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .connected-panel {
+    border-radius: 16px;
+  }
+
+  .connected-header .option.compact select {
+    width: 180px;
+  }
+}
+
+@media (max-width: 340px) {
+  .connected-panel {
+    padding: 8px 10px;
+  }
+
+  .panel-content {
+    padding-left: 28px;
+  }
+
+  .panel-collapsed-bar {
+    width: 40px;
+    height: 40px;
+    min-width: 40px;
+    max-width: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 7px;
+    left: -1px;
+  }
+
+  .connected-panel.minimized .panel-collapsed-bar {
+    left: 0;
+  }
+
+  .collapsed-bar-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .connected-controls-row {
+    gap: 6px;
+  }
+
+  .connected-controls-row > *,
+  .connected-header .option.compact,
+  .controls-right-group,
+  .connection-status-group,
+  .disconnect-btn,
+  .audio-toggle-btn {
+    height: 36px;
+  }
+
+  .connected-header .option.compact {
+    gap: 6px;
+  }
+
+  .connected-header .option.compact label {
+    min-width: 40px;
+    line-height: 36px;
+    font-size: 12px;
+  }
+
+  .connected-header .option.compact select {
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    flex: 1;
+    height: 36px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .controls-right-group {
+    gap: 6px;
+  }
+
+  .connection-status-group {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .connection-status-label,
+  .disconnect-btn {
+    font-size: 12px;
+  }
+
+  .disconnect-btn {
+    padding: 0 10px;
+  }
+
+  .audio-toggle-btn {
+    width: 36px;
+    min-width: 36px;
+  }
 }
 
 /* Minimize button */
@@ -1299,7 +1471,7 @@ video {
 
 
 /* Focus styles for accessibility */
-button:focus,
+button:focus-visible,
 input:focus,
 select:focus {
   outline: 2px solid var(--primary-color);

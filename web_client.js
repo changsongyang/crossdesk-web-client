@@ -7,6 +7,7 @@ const elements = {
   videoContainer: document.getElementById("video-container"),
   video: document.getElementById("video"),
   audio: document.getElementById("audio"),
+  audioToggleBtn: document.getElementById("audio-toggle"),
   connectionOverlay: document.getElementById("connection-overlay"),
   connectedOverlay: document.getElementById("connected-overlay"),
   connectedPanel: document.getElementById("connected-panel"),
@@ -71,6 +72,59 @@ const RECONNECT_MAX_DELAY_MS = Math.max(
 const RECONNECT_MAX_ATTEMPTS = Number.isFinite(Number(CONFIG.reconnectMaxAttempts))
   ? Math.max(1, Number(CONFIG.reconnectMaxAttempts))
   : 8;
+
+function setAudioToggleVisible(visible) {
+  if (!elements.audioToggleBtn) return;
+  elements.audioToggleBtn.style.display = visible ? "inline-flex" : "none";
+}
+
+function updateAudioToggleState() {
+  if (!elements.audioToggleBtn || !elements.audio) return;
+
+  const hasAudio = !!elements.audio.srcObject;
+  setAudioToggleVisible(hasAudio);
+  if (!hasAudio) return;
+
+  const isPlaying = !elements.audio.paused && !elements.audio.muted;
+  elements.audioToggleBtn.classList.toggle("audio-is-playing", isPlaying);
+  const actionLabel = isPlaying ? "静音" : "播放音频";
+  elements.audioToggleBtn.setAttribute(
+    "aria-label",
+    actionLabel
+  );
+  elements.audioToggleBtn.setAttribute(
+    "aria-pressed",
+    isPlaying ? "false" : "true"
+  );
+}
+
+async function tryPlayRemoteAudio() {
+  if (!elements.audio?.srcObject) return false;
+
+  elements.audio.muted = false;
+  try {
+    await elements.audio.play();
+    updateAudioToggleState();
+    return true;
+  } catch (err) {
+    updateAudioToggleState();
+    console.warn("Remote audio playback requires user interaction:", err);
+    return false;
+  }
+}
+
+async function toggleRemoteAudio() {
+  if (!elements.audio?.srcObject) return;
+
+  const isPlaying = !elements.audio.paused && !elements.audio.muted;
+  if (isPlaying) {
+    elements.audio.muted = true;
+    updateAudioToggleState();
+    return;
+  }
+
+  await tryPlayRemoteAudio();
+}
 
 function isSignalingOpen() {
   return !!websocket && websocket.readyState === WebSocket.OPEN;
@@ -499,18 +553,21 @@ function createPeerConnection() {
     // Handle audio tracks
     if (track.kind === "audio" && elements.audio) {
       if (!elements.audio.srcObject) {
-        // First audio track: create new stream
-        const audioStream = streams && streams[0] ? streams[0] : new MediaStream([track]);
-        elements.audio.srcObject = audioStream;
+        // Keep the audio element audio-only even when the remote stream also
+        // contains video tracks.
+        elements.audio.srcObject = new MediaStream([track]);
         elements.audio.autoplay = true;
-        // Try to play audio (may require user interaction)
-        elements.audio.play().catch(err => {
-          console.log("Audio autoplay prevented:", err);
-        });
       } else {
         // Additional audio track: add to existing stream
-        elements.audio.srcObject.addTrack(track);
+        const hasTrack = elements.audio.srcObject
+          .getAudioTracks()
+          .some((audioTrack) => audioTrack.id === track.id);
+        if (!hasTrack) {
+          elements.audio.srcObject.addTrack(track);
+        }
       }
+      updateAudioToggleState();
+      void tryPlayRemoteAudio();
       return;
     }
     
@@ -686,9 +743,9 @@ function connect() {
     if (elements.connectedPanel) {
       isPanelMinimized = false;
       panelAlignment = "left"; // Reset to left alignment
+      minimizedPanelPosition = null;
       elements.connectedPanel.classList.remove("minimized");
-      elements.connectedPanel.style.left = "0";
-      elements.connectedPanel.style.right = "auto";
+      positionExpandedPanel();
       hideConnectedPanel(); // Start auto-hide timer
     }
   }
@@ -730,10 +787,10 @@ function disconnect() {
   isPanelMinimized = false;
   isDragging = false;
   panelAlignment = "left"; // Reset to left alignment
+  minimizedPanelPosition = null;
   if (elements.connectedPanel) {
     elements.connectedPanel.classList.remove("minimized");
-    elements.connectedPanel.style.left = "0";
-    elements.connectedPanel.style.right = "auto";
+    positionExpandedPanel();
   }
 
   if (!sendLeaveRequest()) {
@@ -792,6 +849,8 @@ function hideConnectingOverlayOnFirstFrame() {
 
 function teardownPeerConnection() {
   if (!pc) return;
+
+  setAudioToggleVisible(false);
 
   try {
     pc.getSenders().forEach((sender) => sender.track?.stop?.());
@@ -888,6 +947,12 @@ if (elements.disconnectConnected) {
   elements.disconnectConnected.addEventListener("click", disconnect);
 }
 
+if (elements.audioToggleBtn) {
+  elements.audioToggleBtn.addEventListener("click", () => {
+    void toggleRemoteAudio();
+  });
+}
+
 if (elements.retrySignalingBtn) {
   elements.retrySignalingBtn.addEventListener("click", retrySignalingNow);
 }
@@ -906,159 +971,49 @@ let dragStartY = 0;
 let panelStartLeft = 0;
 let panelStartTop = 0;
 let panelAlignment = "left"; // "left" or "right" - tracks which edge the minimized panel is closer to
-let panelCorner = "top-left"; // "top-left", "top-right", "bottom-left", "bottom-right" - tracks which corner the button is at when expanded
+let minimizedPanelPosition = null;
 const SNAP_THRESHOLD = 20; // Distance in pixels to trigger edge snapping
+const MINIMIZED_PANEL_SIZE = 48;
 
-function calculateExpandPosition(buttonLeft, buttonTop, buttonWidth, buttonHeight) {
-  // Estimated panel dimensions (will be updated after layout)
-  const estimatedPanelWidth = 400;
-  const estimatedPanelHeight = 100;
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  
-  // Try top-left first (button as top-left corner)
-  let expandLeft = buttonLeft;
-  let expandTop = buttonTop;
-  let expandRight = "auto";
-  let expandBottom = "auto";
-  let horizontalAlign = "left";
-  let verticalAlign = "top";
-  
-  // Check if panel would overflow right
-  if (buttonLeft + estimatedPanelWidth > viewportWidth) {
-    // Try top-right (button as top-right corner)
-    if (buttonLeft - estimatedPanelWidth >= 0) {
-      expandLeft = buttonLeft - estimatedPanelWidth + buttonWidth;
-      expandRight = "auto";
-      horizontalAlign = "right";
-    } else {
-      // Panel too wide, align to viewport edge
-      expandLeft = "0";
-      expandRight = "auto";
-      horizontalAlign = "left";
-    }
-  }
-  
-  // Check if panel would overflow bottom
-  if (buttonTop + estimatedPanelHeight > viewportHeight) {
-    // Try bottom-left or bottom-right
-    if (buttonTop - estimatedPanelHeight >= 0) {
-      expandTop = buttonTop - estimatedPanelHeight + buttonHeight;
-      expandBottom = "auto";
-      verticalAlign = "bottom";
-    } else {
-      // Panel too tall, align to viewport edge
-      expandTop = "auto";
-      expandBottom = "0";
-      verticalAlign = "bottom";
-    }
-  }
-  
-  return {
-    left: expandLeft,
-    top: expandTop,
-    right: expandRight,
-    bottom: expandBottom,
-    horizontalAlign,
-    verticalAlign
+function positionExpandedPanel(left = 0, top = 0) {
+  if (!elements.connectedPanel) return;
+  const maxLeft = Math.max(0, window.innerWidth - elements.connectedPanel.offsetWidth);
+  const maxTop = Math.max(0, window.innerHeight - elements.connectedPanel.offsetHeight);
+  minimizedPanelPosition = {
+    left: Math.max(0, Math.min(left, maxLeft)),
+    top: Math.max(0, Math.min(top, maxTop)),
   };
+  elements.connectedPanel.style.left = `${minimizedPanelPosition.left}px`;
+  elements.connectedPanel.style.top = `${minimizedPanelPosition.top}px`;
+  elements.connectedPanel.style.right = "auto";
+  elements.connectedPanel.style.bottom = "auto";
+}
+
+function clampMinimizedPanelPosition(left, top) {
+  return {
+    left: Math.max(0, Math.min(left, window.innerWidth - MINIMIZED_PANEL_SIZE)),
+    top: Math.max(0, Math.min(top, window.innerHeight - MINIMIZED_PANEL_SIZE)),
+  };
+}
+
+function rememberMinimizedPanelPosition() {
+  if (!elements.connectedPanel) return;
+  const rect = elements.connectedPanel.getBoundingClientRect();
+  minimizedPanelPosition = clampMinimizedPanelPosition(rect.left, rect.top);
 }
 
 function togglePanelMinimize() {
   if (!elements.connectedPanel) return;
-  isPanelMinimized = !isPanelMinimized;
-  
   if (isPanelMinimized) {
-    // Minimizing: keep icon at its current position
-    // Get the current icon position BEFORE clearing right/bottom
-    // This is critical: getBoundingClientRect() returns the actual rendered position
-    // regardless of how the panel is positioned (left/right, top/bottom)
-    const iconRect = elements.panelCollapsedBar.getBoundingClientRect();
-    let iconLeft = iconRect.left;
-    let iconTop = iconRect.top;
-    
-    // Ensure position is within viewport bounds (handle edge cases like 0, 0)
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    const buttonSize = 48; // Size of minimized button
-    
-    // Clamp to viewport bounds
-    iconLeft = Math.max(0, Math.min(iconLeft, viewportWidth - buttonSize));
-    iconTop = Math.max(0, Math.min(iconTop, viewportHeight - buttonSize));
-    
-    elements.connectedPanel.classList.add("minimized");
-    // Set left/top and clear right/bottom in a single operation to prevent position jump
-    // Place panel at icon's current position (icon is at top-left of panel, so panel position = icon position)
-    elements.connectedPanel.style.left = `${iconLeft}px`;
-    elements.connectedPanel.style.top = `${iconTop}px`;
-    elements.connectedPanel.style.right = "auto";
-    elements.connectedPanel.style.bottom = "auto";
-    
-    // Force a reflow to ensure the position is applied
-    elements.connectedPanel.offsetHeight;
-  } else {
-    // Expanding: calculate position based on button location
-    const rect = elements.connectedPanel.getBoundingClientRect();
-    const buttonLeft = rect.left;
-    const buttonTop = rect.top;
-    const buttonWidth = rect.width;
-    const buttonHeight = rect.height;
-    
+    rememberMinimizedPanelPosition();
+    isPanelMinimized = false;
     elements.connectedPanel.classList.remove("minimized");
-    
-    // Calculate optimal expand position
-    const pos = calculateExpandPosition(buttonLeft, buttonTop, buttonWidth, buttonHeight);
-    
-    // Apply position after layout update
-    requestAnimationFrame(() => {
-      const actualPanelWidth = elements.connectedPanel.offsetWidth;
-      const actualPanelHeight = elements.connectedPanel.offsetHeight;
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-      
-      // Always expand with button as top-left corner
-      let finalLeft = buttonLeft;
-      let finalTop = buttonTop;
-      let finalRight = "auto";
-      let finalBottom = "auto";
-      let corner = "top-left"; // Always use top-left corner
-      
-      // Check horizontal overflow - ensure panel is fully visible
-      if (buttonLeft + actualPanelWidth > viewportWidth) {
-        // Panel too wide, align to right edge (right: 0) to ensure it's fully visible
-        // Button remains at top-left, but panel right edge touches viewport right edge
-        finalLeft = "auto";
-        finalRight = 0;
-      }
-      
-      // Check vertical overflow - ensure panel is fully visible
-      if (buttonTop + actualPanelHeight > viewportHeight) {
-        // Panel too tall, align to bottom edge (bottom: 0) to ensure it's fully visible
-        // Button remains at top-left, but panel bottom edge touches viewport bottom edge
-        finalTop = "auto";
-        finalBottom = 0;
-      }
-      
-      // Final constraint check - ensure panel is completely within viewport
-      // Only apply constraints if using left/top positioning
-      if (finalLeft !== "auto") {
-        finalLeft = Math.max(0, Math.min(finalLeft, viewportWidth - actualPanelWidth));
-      }
-      if (finalTop !== "auto") {
-        finalTop = Math.max(0, Math.min(finalTop, viewportHeight - actualPanelHeight));
-      }
-      
-      // Record the corner position (always top-left)
-      panelCorner = corner;
-      
-      elements.connectedPanel.style.left = typeof finalLeft === "number" ? `${finalLeft}px` : finalLeft;
-      elements.connectedPanel.style.top = typeof finalTop === "number" ? `${finalTop}px` : finalTop;
-      elements.connectedPanel.style.right = finalRight;
-      elements.connectedPanel.style.bottom = finalBottom;
-      
-      // Update alignment for future reference
-      updatePanelAlignment();
-    });
+    positionExpandedPanel(
+      minimizedPanelPosition.left,
+      minimizedPanelPosition.top
+    );
+  } else {
+    minimizePanel();
   }
   
   // Clear hide timer when toggling
@@ -1070,37 +1025,26 @@ function togglePanelMinimize() {
 
 function minimizePanel() {
   if (!elements.connectedPanel || isPanelMinimized) return;
-  
-  // Get the current icon position BEFORE clearing right/bottom
-  // This is critical: getBoundingClientRect() returns the actual rendered position
-  // regardless of how the panel is positioned (left/right, top/bottom)
+
   const iconRect = elements.panelCollapsedBar.getBoundingClientRect();
-  let iconLeft = iconRect.left;
-  let iconTop = iconRect.top;
-  
-  // Ensure position is within viewport bounds (handle edge cases like 0, 0)
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const buttonSize = 48; // Size of minimized button
-  
-  // Clamp to viewport bounds
-  iconLeft = Math.max(0, Math.min(iconLeft, viewportWidth - buttonSize));
-  iconTop = Math.max(0, Math.min(iconTop, viewportHeight - buttonSize));
-  
+  const targetPosition = minimizedPanelPosition || {
+    left: iconRect.left,
+    top: iconRect.top,
+  };
+  minimizedPanelPosition = clampMinimizedPanelPosition(
+    targetPosition.left,
+    targetPosition.top
+  );
+
   isPanelMinimized = true;
   elements.connectedPanel.classList.add("minimized");
-  
-  // Set left/top and clear right/bottom in a single operation to prevent position jump
-  // Place panel at icon's current position (icon is at top-left of panel, so panel position = icon position)
-  elements.connectedPanel.style.left = `${iconLeft}px`;
-  elements.connectedPanel.style.top = `${iconTop}px`;
+
+  elements.connectedPanel.style.left = `${minimizedPanelPosition.left}px`;
+  elements.connectedPanel.style.top = `${minimizedPanelPosition.top}px`;
   elements.connectedPanel.style.right = "auto";
   elements.connectedPanel.style.bottom = "auto";
-  
-  // Force a reflow to ensure the position is applied before any other operations
+
   elements.connectedPanel.offsetHeight;
-  
-  // Update alignment based on final button position
   updatePanelAlignment();
 }
 
@@ -1137,75 +1081,9 @@ function applyPanelAlignment() {
   // Don't reset top/bottom - keep current position
 }
 
-function maximizePanel() {
-  if (!elements.connectedPanel || !isPanelMinimized) return;
-  
-  // Save current button position before maximizing
-  const rect = elements.connectedPanel.getBoundingClientRect();
-  const buttonLeft = rect.left;
-  const buttonTop = rect.top;
-  const buttonWidth = rect.width;
-  const buttonHeight = rect.height;
-  
-  isPanelMinimized = false;
-  elements.connectedPanel.classList.remove("minimized");
-  
-  // Use requestAnimationFrame to ensure layout is updated before setting position
-  requestAnimationFrame(() => {
-    const actualPanelWidth = elements.connectedPanel.offsetWidth;
-    const actualPanelHeight = elements.connectedPanel.offsetHeight;
-    const viewportWidth = window.innerWidth;
-    const viewportHeight = window.innerHeight;
-    
-      // Always expand with button as top-left corner
-      let finalLeft = buttonLeft;
-      let finalTop = buttonTop;
-      let finalRight = "auto";
-      let finalBottom = "auto";
-      let corner = "top-left"; // Always use top-left corner
-      
-      // Check horizontal overflow - ensure panel is fully visible
-      if (buttonLeft + actualPanelWidth > viewportWidth) {
-        // Panel too wide, align to right edge (right: 0) to ensure it's fully visible
-        // Button remains at top-left, but panel right edge touches viewport right edge
-        finalLeft = "auto";
-        finalRight = 0;
-      }
-      
-      // Check vertical overflow - ensure panel is fully visible
-      if (buttonTop + actualPanelHeight > viewportHeight) {
-        // Panel too tall, align to bottom edge (bottom: 0) to ensure it's fully visible
-        // Button remains at top-left, but panel bottom edge touches viewport bottom edge
-        finalTop = "auto";
-        finalBottom = 0;
-      }
-      
-      // Final constraint check - ensure panel is completely within viewport
-      // Only apply constraints if using left/top positioning
-      if (finalLeft !== "auto") {
-        finalLeft = Math.max(0, Math.min(finalLeft, viewportWidth - actualPanelWidth));
-      }
-      if (finalTop !== "auto") {
-        finalTop = Math.max(0, Math.min(finalTop, viewportHeight - actualPanelHeight));
-      }
-      
-      // Record the corner position (always top-left)
-      panelCorner = corner;
-      
-      elements.connectedPanel.style.left = typeof finalLeft === "number" ? `${finalLeft}px` : finalLeft;
-      elements.connectedPanel.style.top = typeof finalTop === "number" ? `${finalTop}px` : finalTop;
-      elements.connectedPanel.style.right = finalRight;
-      elements.connectedPanel.style.bottom = finalBottom;
-      
-      // Update alignment for future reference
-      updatePanelAlignment();
-  });
-}
-
 function showConnectedPanel() {
-  if (!elements.connectedPanel) return;
-  maximizePanel();
-  
+  if (!elements.connectedPanel || isPanelMinimized) return;
+
   // Clear existing hide timer
   if (panelHideTimer) {
     clearTimeout(panelHideTimer);
@@ -1216,7 +1094,7 @@ function showConnectedPanel() {
 function hideConnectedPanel() {
   if (!elements.connectedPanel) return;
   panelHideTimer = setTimeout(() => {
-    if (elements.connectedPanel && !isPanelMinimized) {
+    if (elements.connectedPanel && !isPanelMinimized && !isDragging) {
       minimizePanel();
     }
   }, PANEL_HIDE_DELAY);
@@ -1226,6 +1104,10 @@ function hideConnectedPanel() {
 function startDrag(e) {
   if (!elements.connectedPanel) return;
   isDragging = true;
+  if (panelHideTimer) {
+    clearTimeout(panelHideTimer);
+    panelHideTimer = null;
+  }
   // Notify control manager to block mouse events during drag
   if (control && control.setDraggingPanel) {
     control.setDraggingPanel(true);
@@ -1270,6 +1152,13 @@ function onDrag(e) {
   elements.connectedPanel.style.top = `${constrainedTop}px`;
   elements.connectedPanel.style.right = "auto";
   elements.connectedPanel.style.bottom = "auto";
+
+  if (!isPanelMinimized) {
+    minimizedPanelPosition = {
+      left: constrainedLeft,
+      top: constrainedTop,
+    };
+  }
   
   // Update alignment based on position
   const viewportWidth = window.innerWidth;
@@ -1352,13 +1241,17 @@ if (elements.connectedOverlay) {
   elements.connectedOverlay.addEventListener("mousemove", (e) => {
     if (e.clientY <= topTriggerHeight) {
       showConnectedPanel();
-    } else if (!elements.connectedPanel?.matches(":hover") && !isPanelMinimized) {
+    } else if (
+      !isDragging &&
+      !elements.connectedPanel?.matches(":hover") &&
+      !isPanelMinimized
+    ) {
       hideConnectedPanel();
     }
   });
   
   elements.connectedOverlay.addEventListener("mouseleave", () => {
-    if (!isPanelMinimized) {
+    if (!isPanelMinimized && !isDragging) {
       hideConnectedPanel();
     }
   });
@@ -1372,7 +1265,7 @@ if (elements.connectedOverlay) {
     });
     
     elements.connectedPanel.addEventListener("mouseleave", () => {
-      if (!isPanelMinimized) {
+      if (!isPanelMinimized && !isDragging) {
         hideConnectedPanel();
       }
     });
@@ -1525,15 +1418,14 @@ if (elements.connectedOverlay) {
   // Show panel when clicking on video (for touch devices)
   if (elements.video) {
     elements.video.addEventListener("click", (e) => {
-      if (e.clientY <= topTriggerHeight || e.target === elements.video) {
-        if (isPanelMinimized) {
-          togglePanelMinimize();
-        } else {
-          showConnectedPanel();
-          hideConnectedPanel();
-        }
-    }
-  });
+      if (
+        !isPanelMinimized &&
+        (e.clientY <= topTriggerHeight || e.target === elements.video)
+      ) {
+        showConnectedPanel();
+        hideConnectedPanel();
+      }
+    });
   }
 }
 

@@ -141,7 +141,7 @@
             x5-video-player-fullscreen="true"
             muted
           ></video>
-          <audio id="audio" autoplay></audio>
+          <audio id="audio" autoplay playsinline></audio>
 
           <!-- Connecting overlay -->
           <div id="connecting-overlay" class="connecting-overlay" style="display: none">
@@ -167,7 +167,7 @@
                   <div class="connected-controls-row">
                     <div class="option compact">
                       <label for="display-id">画面: </label>
-                      <select id="display-id" style="width: 110px; min-width: 110px;" disabled>
+                      <select id="display-id" disabled>
                         <option value="" selected>候选画面 ID...</option>
                       </select>
                     </div>
@@ -178,7 +178,7 @@
                       style="display: none"
                     >
                       <label for="mouse-control-mode">鼠标模式: </label>
-                      <select id="mouse-control-mode" style="width: 110px; min-width: 110px;">
+                      <select id="mouse-control-mode">
                         <option value="absolute">精准</option>
                         <option value="relative">增量</option>
                       </select>
@@ -204,6 +204,34 @@
                           ></div>
                         </div>
                       </div>
+                      <button
+                        id="audio-toggle"
+                        class="audio-toggle-btn"
+                        type="button"
+                        style="display: none"
+                        aria-pressed="false"
+                        aria-label="播放音频"
+                      >
+                        <svg
+                          class="audio-toggle-icon"
+                          viewBox="0 0 24 24"
+                          aria-hidden="true"
+                          focusable="false"
+                        >
+                          <path
+                            class="audio-icon-speaker"
+                            d="M4 10v4h4l5 4V6l-5 4H4Z"
+                          />
+                          <path
+                            class="audio-icon-volume"
+                            d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"
+                          />
+                          <path
+                            class="audio-icon-mute"
+                            d="m16.5 9 5 5m0-5-5 5"
+                          />
+                        </svg>
+                      </button>
                       <!-- Disconnect button -->
                       <button
                         id="disconnect-connected"
