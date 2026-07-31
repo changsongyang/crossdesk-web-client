@@ -973,7 +973,6 @@ let panelStartTop = 0;
 let panelAlignment = "left"; // "left" or "right" - tracks which edge the minimized panel is closer to
 let minimizedPanelPosition = null;
 const SNAP_THRESHOLD = 20; // Distance in pixels to trigger edge snapping
-const MINIMIZED_PANEL_SIZE = 48;
 
 function positionExpandedPanel(left = 0, top = 0) {
   if (!elements.connectedPanel) return;
@@ -990,9 +989,11 @@ function positionExpandedPanel(left = 0, top = 0) {
 }
 
 function clampMinimizedPanelPosition(left, top) {
+  const panelWidth = elements.connectedPanel?.offsetWidth || 48;
+  const panelHeight = elements.connectedPanel?.offsetHeight || 48;
   return {
-    left: Math.max(0, Math.min(left, window.innerWidth - MINIMIZED_PANEL_SIZE)),
-    top: Math.max(0, Math.min(top, window.innerHeight - MINIMIZED_PANEL_SIZE)),
+    left: Math.max(0, Math.min(left, window.innerWidth - panelWidth)),
+    top: Math.max(0, Math.min(top, window.innerHeight - panelHeight)),
   };
 }
 
@@ -1031,13 +1032,13 @@ function minimizePanel() {
     left: iconRect.left,
     top: iconRect.top,
   };
+
+  isPanelMinimized = true;
+  elements.connectedPanel.classList.add("minimized");
   minimizedPanelPosition = clampMinimizedPanelPosition(
     targetPosition.left,
     targetPosition.top
   );
-
-  isPanelMinimized = true;
-  elements.connectedPanel.classList.add("minimized");
 
   elements.connectedPanel.style.left = `${minimizedPanelPosition.left}px`;
   elements.connectedPanel.style.top = `${minimizedPanelPosition.top}px`;
