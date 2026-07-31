@@ -33,6 +33,9 @@ const DEFAULT_CONFIG = {
   reconnectDelayMs: 2000,
   reconnectMaxDelayMs: 30000,
   reconnectMaxAttempts: 8,
+  connectionTimeoutMs: 20000,
+  iceGatheringTimeoutMs: 10000,
+  iceDisconnectedTimeoutMs: 5000,
   interactionGuardEnabled: true,
   interactionGuardScope: "video", // "video" | "global" | "none"
   clientTag: "web",

@@ -36,6 +36,9 @@ const DEFAULT_CONFIG = {
   reconnectDelayMs: 2000,
   reconnectMaxDelayMs: 30000,
   reconnectMaxAttempts: 8,
+  connectionTimeoutMs: 20000,
+  iceGatheringTimeoutMs: 10000,
+  iceDisconnectedTimeoutMs: 5000,
   interactionGuardEnabled: true,
   interactionGuardScope: "video", // "video" | "global" | "none"
   clientTag: "web",
@@ -52,6 +55,9 @@ let reconnectTimer = null;
 let reconnectAttempt = 0;
 let lastPongAt = Date.now();
 let connectHintTimer = null;
+let connectionTimeoutTimer = null;
+let iceDisconnectedTimer = null;
+let isConnectionSessionActive = false;
 const CONNECT_BUTTON_DEFAULT_TEXT = elements.connectBtn
   ? elements.connectBtn.textContent
   : "连接";
@@ -76,6 +82,18 @@ const RECONNECT_MAX_DELAY_MS = Math.max(
 const RECONNECT_MAX_ATTEMPTS = Number.isFinite(Number(CONFIG.reconnectMaxAttempts))
   ? Math.max(1, Number(CONFIG.reconnectMaxAttempts))
   : 8;
+const CONNECTION_TIMEOUT_MS = Math.max(
+  1000,
+  Number(CONFIG.connectionTimeoutMs) || 20000
+);
+const ICE_GATHERING_TIMEOUT_MS = Math.max(
+  1000,
+  Number(CONFIG.iceGatheringTimeoutMs) || 10000
+);
+const ICE_DISCONNECTED_TIMEOUT_MS = Math.max(
+  1000,
+  Number(CONFIG.iceDisconnectedTimeoutMs) || 5000
+);
 
 function setAudioToggleVisible(visible) {
   if (!elements.audioToggleBtn) return;
@@ -281,6 +299,16 @@ function setSignalingConnectionState(nextState) {
 
   updateConnectAvailability();
 
+  if (nextState === SignalingConnectionState.connecting) {
+    setConnectionFeedback("正在连接服务器...", "info");
+  } else if (nextState === SignalingConnectionState.reconnecting) {
+    setConnectionFeedback("服务器连接中断，正在重连...", "info");
+  } else if (nextState === SignalingConnectionState.disconnected) {
+    setConnectionFeedback("无法连接服务器，请重试", "error");
+  } else if (!isLoggedIn) {
+    setConnectionFeedback("正在初始化连接...", "info");
+  }
+
   if (elements.retrySignalingBtn) {
     const showRetry =
       nextState === SignalingConnectionState.reconnecting ||
@@ -409,6 +437,46 @@ function retrySignalingNow() {
   connectSignaling(true);
 }
 
+function clearConnectionTimeout() {
+  if (!connectionTimeoutTimer) return;
+  clearTimeout(connectionTimeoutTimer);
+  connectionTimeoutTimer = null;
+}
+
+function startConnectionTimeout() {
+  clearConnectionTimeout();
+  connectionTimeoutTimer = setTimeout(() => {
+    connectionTimeoutTimer = null;
+    failConnection("连接超时，请检查远程设备状态后重试");
+  }, CONNECTION_TIMEOUT_MS);
+}
+
+function clearIceDisconnectedTimeout() {
+  if (!iceDisconnectedTimer) return;
+  clearTimeout(iceDisconnectedTimer);
+  iceDisconnectedTimer = null;
+}
+
+function startIceDisconnectedTimeout(peer) {
+  clearIceDisconnectedTimeout();
+  iceDisconnectedTimer = setTimeout(() => {
+    iceDisconnectedTimer = null;
+    if (
+      isConnectionSessionActive &&
+      pc === peer &&
+      peer.iceConnectionState === "disconnected"
+    ) {
+      failConnection("连接已断开，请检查网络后重试");
+    }
+  }, ICE_DISCONNECTED_TIMEOUT_MS);
+}
+
+function failConnection(message) {
+  if (!isConnectionSessionActive) return;
+  disconnect();
+  setConnectionFeedback(message, "error");
+}
+
 function handleSignalingMessage(message) {
   if (!isPlainObject(message) || typeof message.type !== "string") {
     return;
@@ -429,6 +497,7 @@ function handleSignalingMessage(message) {
           connectHintTimer = null;
         }
         updateConnectAvailability();
+        setConnectionFeedback();
       } else {
         console.warn("Invalid login message: missing user_id");
       }
@@ -436,33 +505,20 @@ function handleSignalingMessage(message) {
     case "user_join_transmission":
       // Handle join transmission response
       if (message.status === "failed") {
-        let errorMessage = "";
+        let errorMessage = "连接失败，请稍后重试";
         if (message.reason === "No such transmission id") {
           errorMessage = "没有该设备";
         } else if (message.reason === "Incorrect password") {
           errorMessage = "密码错误";
         }
-        
-        if (errorMessage && elements.connectingOverlay && elements.connectingMessageText) {
-          // Show error message
-          elements.connectingMessageText.textContent = errorMessage;
-          elements.connectingOverlay.style.display = "flex";
-          
-          // Reset connection state after showing error for 3 seconds
-          setTimeout(() => {
-            // Hide connecting overlay first
-            if (elements.connectingOverlay) {
-              elements.connectingOverlay.style.display = "none";
-            }
-            // Then disconnect to reset UI
-            disconnect();
-          }, 3000);
-        }
+        failConnection(errorMessage);
       }
       break;
     case "offer":
+      if (!isConnectionSessionActive) return;
       if (typeof message.sdp !== "string" || message.sdp.length === 0) {
         console.warn("Invalid offer message: missing sdp");
+        failConnection("连接失败，请稍后重试");
         break;
       }
       handleOffer({ type: "offer", sdp: message.sdp });
@@ -542,10 +598,18 @@ function sendLogin() {
 connectSignaling(false);
 
 function handleOffer(offer) {
-  pc = createPeerConnection();
-  pc.setRemoteDescription(offer)
-    .then(() => sendAnswer(pc))
-    .catch((err) => console.error("Failed to handle offer", err));
+  const peer = createPeerConnection();
+  pc = peer;
+  peer.setRemoteDescription(offer)
+    .then(() => {
+      if (!isConnectionSessionActive || peer !== pc) return;
+      return sendAnswer(peer);
+    })
+    .catch((err) => {
+      if (!isConnectionSessionActive || peer !== pc) return;
+      console.error("Failed to handle offer", err);
+      failConnection("连接失败，请稍后重试");
+    });
 }
 
 function createPeerConnection() {
@@ -557,24 +621,30 @@ function createPeerConnection() {
   const peer = new RTCPeerConnection(config);
 
   peer.addEventListener("iceconnectionstatechange", () => {
+    if (peer !== pc) return;
     const state = peer.iceConnectionState;
     // Update status LED: connected when ICE state is "connected"
-    const isConnected = state === "connected";
+    const isConnected = state === "connected" || state === "completed";
     updateStatusLed(elements.connectionStatusLed, isConnected, true);
     updateStatusLed(elements.connectedStatusLed, isConnected, false);
     
-    // Show connection status overlay for disconnected or failed states
-    if (state === "disconnected" || state === "failed") {
+    if (state === "failed") {
+      failConnection("连接失败，请检查网络后重试");
+      return;
+    }
+
+    // Give transient disconnections a short recovery window.
+    if (state === "disconnected") {
       if (elements.connectingOverlay && elements.connectingMessageText) {
-        // Update message text based on state
-        if (state === "disconnected") {
-          elements.connectingMessageText.textContent = "连接已断开...";
-        } else if (state === "failed") {
-          elements.connectingMessageText.textContent = "连接失败...";
-        }
+        elements.connectingMessageText.textContent = "连接已断开，正在恢复...";
         elements.connectingOverlay.style.display = "flex";
       }
+      startIceDisconnectedTimeout(peer);
     } else if (state === "connected" || state === "checking" || state === "completed") {
+      if (state === "connected" || state === "completed") {
+        clearConnectionTimeout();
+        clearIceDisconnectedTimeout();
+      }
       // Hide overlay when connected or checking
       if (elements.connectingOverlay) {
         // Only hide if we're not in the initial connecting phase
@@ -714,7 +784,7 @@ function bindDataChannel(channel) {
 
 async function sendAnswer(peer) {
   await peer.setLocalDescription(await peer.createAnswer());
-  await waitIceGathering(peer);
+  await waitIceGathering(peer, ICE_GATHERING_TIMEOUT_MS);
   const sent = sendSignaling(
     {
       type: "answer",
@@ -735,14 +805,22 @@ async function sendAnswer(peer) {
   }
 }
 
-function waitIceGathering(peer) {
+function waitIceGathering(peer, timeoutMs) {
   if (peer.iceGatheringState === "complete") {
     return Promise.resolve();
   }
-  return new Promise((resolve) => {
-    peer.addEventListener("icegatheringstatechange", () => {
-      if (peer.iceGatheringState === "complete") resolve();
-    });
+  return new Promise((resolve, reject) => {
+    const onStateChange = () => {
+      if (peer.iceGatheringState !== "complete") return;
+      clearTimeout(timeoutTimer);
+      peer.removeEventListener("icegatheringstatechange", onStateChange);
+      resolve();
+    };
+    const timeoutTimer = setTimeout(() => {
+      peer.removeEventListener("icegatheringstatechange", onStateChange);
+      reject(new Error("ICE gathering timed out"));
+    }, timeoutMs);
+    peer.addEventListener("icegatheringstatechange", onStateChange);
   });
 }
 
@@ -798,6 +876,9 @@ function connect() {
     showConnectInitializingHint();
     return;
   }
+  clearConnectionFieldErrors();
+  setConnectionFeedback();
+  isConnectionSessionActive = true;
   elements.connectBtn.style.display = "none";
   elements.disconnectBtn.style.display = "inline-block";
   elements.media.style.display = "flex";
@@ -827,12 +908,18 @@ function connect() {
   }
   if (!sendJoinRequest()) {
     triggerReconnect("join_send_failed");
-    disconnect();
+    failConnection("服务器连接中断，请稍后重试");
+    return;
   }
+  startConnectionTimeout();
 }
 
 function disconnect() {
   if (!elements.connectBtn || !elements.disconnectBtn || !elements.media) return;
+  isConnectionSessionActive = false;
+  clearConnectionTimeout();
+  clearIceDisconnectedTimeout();
+  setConnectionFeedback();
   elements.disconnectBtn.style.display = "none";
   elements.connectBtn.style.display = "inline-block";
   elements.media.style.display = "none";
