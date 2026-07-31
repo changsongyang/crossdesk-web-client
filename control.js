@@ -621,14 +621,18 @@
         };
       }
 
+      const isHorizontalWheel = event.deltaY === 0;
+      const scrollDelta = isHorizontalWheel ? event.deltaX : -event.deltaY;
+
       this.sendMouseAction({
         x: coords.x,
         y: coords.y,
-        flag:
-          event.deltaY === 0
-            ? MouseFlag.wheel_horizontal
-            : MouseFlag.wheel_vertical,
-        scroll: event.deltaY || event.deltaX,
+        flag: isHorizontalWheel
+          ? MouseFlag.wheel_horizontal
+          : MouseFlag.wheel_vertical,
+        // Browser deltaY is positive when scrolling down, while the remote
+        // mouse protocol uses positive values for scrolling up.
+        scroll: scrollDelta,
       });
       event.preventDefault();
     }
@@ -1247,9 +1251,8 @@
 
     emitVirtualWheel(direction = "up") {
       // direction: "up" or "down"
-      // Up scroll: negative value (scroll up)
-      // Down scroll: positive value (scroll down)
-      const scrollValue = direction === "up" ? -1 : 1;
+      // The remote mouse protocol uses positive values for scrolling up.
+      const scrollValue = direction === "up" ? 1 : -1;
       this.sendMouseAction({
         x: this.state.normalizedPos.x,
         y: this.state.normalizedPos.y,
