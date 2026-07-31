@@ -318,6 +318,27 @@ body {
   box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
 }
 
+.option input[aria-invalid="true"] {
+  border-color: var(--danger-color);
+  box-shadow: 0 0 0 2px rgba(244, 67, 54, 0.12);
+}
+
+.connection-feedback {
+  display: none;
+  margin: -2px 0 12px;
+  color: var(--secondary-text-color);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.connection-feedback:not(:empty) {
+  display: block;
+}
+
+.connection-feedback[data-tone="error"] {
+  color: #c62828;
+}
+
 .option select {
   padding: 8px 12px;
   border: 1px solid var(--border-color);

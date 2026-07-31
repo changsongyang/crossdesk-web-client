@@ -109,17 +109,39 @@
               ></div>
             </div>
           </div>
-          <form>
+          <form id="connection-form" novalidate>
             <div class="option">
               <label for="transmission-id">远程设备 ID:</label>
-              <input id="transmission-id" type="text" value="" autocomplete="off" />
+              <input
+                id="transmission-id"
+                type="text"
+                value=""
+                autocomplete="off"
+                aria-describedby="connection-feedback"
+                required
+              />
             </div>
             <div class="option">
               <label for="transmission-pwd">密码:</label>
-              <input id="transmission-pwd" type="password" value="" autocomplete="current-password" maxlength="6" />
+              <input
+                id="transmission-pwd"
+                type="password"
+                value=""
+                autocomplete="current-password"
+                aria-describedby="connection-feedback"
+                minlength="6"
+                maxlength="6"
+                required
+              />
             </div>
+            <p
+              id="connection-feedback"
+              class="connection-feedback"
+              role="status"
+              aria-live="polite"
+            ></p>
             <div class="actions">
-              <button id="connect" type="button" disabled>连接</button>
+              <button id="connect" type="submit" disabled>连接</button>
               <button id="retry-signaling" type="button" class="secondary-btn" style="display: none">
                 重连服务器
               </button>

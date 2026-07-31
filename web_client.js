@@ -1,4 +1,8 @@
 const elements = {
+  connectionForm: document.getElementById("connection-form"),
+  transmissionIdInput: document.getElementById("transmission-id"),
+  transmissionPwdInput: document.getElementById("transmission-pwd"),
+  connectionFeedback: document.getElementById("connection-feedback"),
   displaySelect: document.getElementById("display-id"),
   connectBtn: document.getElementById("connect"),
   retrySignalingBtn: document.getElementById("retry-signaling"),
@@ -194,9 +198,65 @@ function parseSignalingMessage(rawData) {
   return message;
 }
 
+function setConnectionFeedback(message = "", tone = "") {
+  if (!elements.connectionFeedback) return;
+  elements.connectionFeedback.textContent = message;
+  if (tone) {
+    elements.connectionFeedback.dataset.tone = tone;
+  } else {
+    delete elements.connectionFeedback.dataset.tone;
+  }
+}
+
+function getNormalizedTransmissionId() {
+  return elements.transmissionIdInput?.value.replace(/\s+/g, "") || "";
+}
+
+function getNormalizedTransmissionPwd() {
+  return elements.transmissionPwdInput?.value.trim().slice(0, 6) || "";
+}
+
+function isConnectionFormValid() {
+  return (
+    getNormalizedTransmissionId().length > 0 &&
+    getNormalizedTransmissionPwd().length === 6
+  );
+}
+
+function validateConnectionForm(showFeedback = true) {
+  const hasTransmissionId = getNormalizedTransmissionId().length > 0;
+  const hasValidPassword = getNormalizedTransmissionPwd().length === 6;
+
+  elements.transmissionIdInput?.setAttribute(
+    "aria-invalid",
+    hasTransmissionId ? "false" : "true"
+  );
+  elements.transmissionPwdInput?.setAttribute(
+    "aria-invalid",
+    hasValidPassword ? "false" : "true"
+  );
+
+  if (showFeedback) {
+    if (!hasTransmissionId) {
+      setConnectionFeedback("请输入远程设备 ID", "error");
+    } else if (!hasValidPassword) {
+      setConnectionFeedback("请输入 6 位密码", "error");
+    }
+  }
+
+  return hasTransmissionId && hasValidPassword;
+}
+
+function clearConnectionFieldErrors() {
+  elements.transmissionIdInput?.setAttribute("aria-invalid", "false");
+  elements.transmissionPwdInput?.setAttribute("aria-invalid", "false");
+}
+
 function updateConnectAvailability() {
   const canConnect =
-    signalingConnectionState === SignalingConnectionState.connected && isLoggedIn;
+    signalingConnectionState === SignalingConnectionState.connected &&
+    isLoggedIn &&
+    isConnectionFormValid();
   enableConnectButton(canConnect);
   if (elements.connectBtn && !connectHintTimer) {
     elements.connectBtn.textContent = CONNECT_BUTTON_DEFAULT_TEXT;
@@ -687,14 +747,15 @@ function waitIceGathering(peer) {
 }
 
 function getTransmissionId() {
-  const transmissionIdInput = document.getElementById("transmission-id");
-  const normalizedId = transmissionIdInput.value.replace(/\s+/g, "");
-  transmissionIdInput.value = normalizedId;
+  const normalizedId = getNormalizedTransmissionId();
+  if (elements.transmissionIdInput) {
+    elements.transmissionIdInput.value = normalizedId;
+  }
   return normalizedId;
 }
 
 function getTransmissionPwd() {
-  return document.getElementById("transmission-pwd").value.trim().slice(0, 6);
+  return getNormalizedTransmissionPwd();
 }
 
 function sendJoinRequest() {
@@ -724,6 +785,10 @@ function sendLeaveRequest() {
 
 function connect() {
   if (!elements.connectBtn || !elements.disconnectBtn || !elements.media) return;
+  if (!validateConnectionForm()) {
+    updateConnectAvailability();
+    return;
+  }
   if (!isSignalingOpen()) {
     showConnectInitializingHint();
     triggerReconnect("connect_without_signaling");
@@ -810,6 +875,7 @@ function disconnect() {
   // Reset status LEDs and hide indicator
   updateStatusLed(elements.connectionStatusLed, false, true);
   updateStatusLed(elements.connectedStatusLed, false, false);
+  updateConnectAvailability();
 }
 
 function hideConnectingOverlayOnFirstFrame() {
@@ -938,8 +1004,41 @@ function setDisplayId() {
 }
 
 
-if (elements.connectBtn) {
-  elements.connectBtn.addEventListener("click", connect);
+if (elements.connectionForm) {
+  elements.connectionForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    connect();
+  });
+  elements.connectionForm.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    connect();
+  });
+}
+
+if (elements.transmissionIdInput && elements.transmissionPwdInput) {
+  const onConnectionInput = () => {
+    clearConnectionFieldErrors();
+    if (
+      signalingConnectionState === SignalingConnectionState.connected &&
+      isLoggedIn
+    ) {
+      setConnectionFeedback();
+    }
+    updateConnectAvailability();
+  };
+  elements.transmissionIdInput.addEventListener("input", onConnectionInput);
+  elements.transmissionPwdInput.addEventListener("input", onConnectionInput);
+  elements.transmissionIdInput.addEventListener("blur", () => {
+    if (getNormalizedTransmissionId()) return;
+    elements.transmissionIdInput.setAttribute("aria-invalid", "true");
+    setConnectionFeedback("请输入远程设备 ID", "error");
+  });
+  elements.transmissionPwdInput.addEventListener("blur", () => {
+    if (getNormalizedTransmissionPwd().length === 6) return;
+    elements.transmissionPwdInput.setAttribute("aria-invalid", "true");
+    setConnectionFeedback("请输入 6 位密码", "error");
+  });
 }
 
 if (elements.disconnectBtn) {
