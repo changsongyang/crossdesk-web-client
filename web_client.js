@@ -1283,7 +1283,11 @@ function showConnectedPanel() {
 
 function hideConnectedPanel() {
   if (!elements.connectedPanel) return;
+  if (panelHideTimer) {
+    clearTimeout(panelHideTimer);
+  }
   panelHideTimer = setTimeout(() => {
+    panelHideTimer = null;
     if (elements.connectedPanel && !isPanelMinimized && !isDragging) {
       minimizePanel();
     }
