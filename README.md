@@ -26,7 +26,6 @@ const DEFAULT_CONFIG = {
   signalingUrl: "wss://api.crossdesk.cn:9099",
   iceServers: [
     { urls: ["stun:api.crossdesk.cn:3478"] },
-    { urls: ["turn:api.crossdesk.cn:3478"], username: "crossdesk", credential: "crossdeskpw" },
   ],
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
@@ -41,14 +40,32 @@ const DEFAULT_CONFIG = {
   clientTag: "web",
 };
 ```
-在完成[ CrossDesk Server ](https://github.com/kunkundi/crossdesk-server)的部署后，请将配置项中的 signalingUrl 和 iceServers 配置成你的 CrossDesk Server 的外网地址和端口。
+在完成[ CrossDesk Server ](https://github.com/kunkundi/crossdesk-server)的部署后，请将配置项中的 signalingUrl 和 STUN 地址配置成你的 CrossDesk Server 的外网地址和端口。
 ```
 # signalingUrl
 wss://api.crossdesk.cn:9099 替换为 EXTERNAL_IP:CROSSDESK_SERVER_PORT
 
-# iceServers
+# iceServers（仅配置 STUN）
 api.crossdesk.cn:3478 替换为 EXTERNAL_IP:COTURN_PORT
 ```
+
+## 动态 TURN 凭据
+
+TURN 用户名和密码不再写入 Web 客户端。信令服务会在登录成功以及发送 `offer` 时，通过消息中的 `turn` 字段下发新的临时凭据：
+
+```json
+{
+  "turn": {
+    "host": "turn.example.com",
+    "port": 3478,
+    "username": "<expires_at>:<user_id>",
+    "password": "<signed password>",
+    "expires_at": 1700003600
+  }
+}
+```
+
+Web 客户端会校验并仅在内存中保存该凭据，在创建 `RTCPeerConnection` 前加入 UDP/TCP TURN 地址。凭据到期后不会继续用于新连接；当前已经建立的连接不会因内存凭据更新而中断。`COTURN_AUTH_SECRET` 只保存在 CrossDesk Server 和 Coturn 中，不会下发到浏览器。
 
 ## WebRTC Adapter 版本锁定
 

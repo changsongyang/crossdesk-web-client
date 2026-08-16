@@ -29,7 +29,6 @@ const DEFAULT_CONFIG = {
   signalingUrl: "wss://api.crossdesk.cn:9099",
   iceServers: [
     { urls: ["stun:api.crossdesk.cn:3478"] },
-    { urls: ["turn:api.crossdesk.cn:3478"], username: "crossdesk", credential: "crossdeskpw" },
   ],
   heartbeatIntervalMs: 3000,
   heartbeatTimeoutMs: 10000,
@@ -46,7 +45,9 @@ const DEFAULT_CONFIG = {
 const CONFIG = Object.assign({}, DEFAULT_CONFIG, window.CROSSDESK_CONFIG || {});
 
 const control = window.CrossDeskControl;
+const turnCredentials = window.CrossDeskTurnCredentials;
 let pc = null;
+let dynamicTurnCredentials = null;
 let clientId = "000000";
 let isLoggedIn = false;
 let websocket = null;
@@ -194,6 +195,49 @@ function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function getIceServers() {
+  const configuredServers = Array.isArray(CONFIG.iceServers)
+    ? CONFIG.iceServers.slice()
+    : [];
+
+  if (!dynamicTurnCredentials) return configuredServers;
+  if (dynamicTurnCredentials.expiresAt <= Math.floor(Date.now() / 1000)) {
+    dynamicTurnCredentials = null;
+    return configuredServers;
+  }
+
+  configuredServers.push(dynamicTurnCredentials.iceServer);
+  return configuredServers;
+}
+
+function applyDynamicTurnCredentials(message) {
+  if (!Object.prototype.hasOwnProperty.call(message, "turn")) return false;
+  if (!turnCredentials?.parseTurnCredentials) {
+    console.error("[CrossDesk] TURN credential helper is unavailable");
+    return false;
+  }
+
+  const parsed = turnCredentials.parseTurnCredentials(message.turn);
+  if (!parsed) {
+    console.warn("[CrossDesk] Ignore malformed or expired dynamic TURN credentials");
+    return false;
+  }
+
+  dynamicTurnCredentials = parsed;
+
+  // setConfiguration only affects subsequent candidate gathering/ICE restarts;
+  // it does not interrupt an already established relay allocation.
+  if (pc && pc.signalingState !== "closed") {
+    try {
+      pc.setConfiguration({ iceServers: getIceServers() });
+    } catch (err) {
+      console.warn("[CrossDesk] Failed to update active peer TURN configuration", err);
+    }
+  }
+
+  return true;
+}
+
 function parseSignalingMessage(rawData) {
   let message;
   try {
@@ -322,6 +366,7 @@ function connectSignaling(isReconnect = false) {
   stopHeartbeat();
   isLoggedIn = false;
   clientId = "000000";
+  dynamicTurnCredentials = null;
   if (connectHintTimer) {
     clearTimeout(connectHintTimer);
     connectHintTimer = null;
@@ -482,6 +527,10 @@ function handleSignalingMessage(message) {
     return;
   }
 
+  // login, user_join_transmission, and offer may all carry a freshly issued
+  // credential. Applying it here guarantees offer handling sees it first.
+  applyDynamicTurnCredentials(message);
+
   switch (message.type) {
     case "login":
       if (typeof message.user_id === "string" && message.user_id.trim().length > 0) {
@@ -522,6 +571,14 @@ function handleSignalingMessage(message) {
         break;
       }
       handleOffer({ type: "offer", sdp: message.sdp });
+      break;
+    case "turn_credentials":
+      if (message.status !== "success") {
+        console.warn(
+          "[CrossDesk] Failed to refresh dynamic TURN credentials:",
+          message.reason || "Unknown error"
+        );
+      }
       break;
     case "new_candidate_mid":
       if (!pc) return;
@@ -614,7 +671,7 @@ function handleOffer(offer) {
 
 function createPeerConnection() {
   const config = {
-    iceServers: CONFIG.iceServers,
+    iceServers: getIceServers(),
     iceTransportPolicy: "all",
   };
 
