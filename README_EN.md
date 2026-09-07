@@ -48,13 +48,13 @@ For self-hosting, both clients must use the same signaling service. Forking or d
 
 ### Phone and tablet browsers
 
-**Touching the video moves the pointer; use the virtual mouse buttons to click.** Web gestures differ from those in the native iOS client.
+**Tap the video with one finger to left-click or two fingers to right-click; slide to move the pointer.** You can also click with the virtual mouse buttons.
 
 | Action | How to use it |
 | --- | --- |
 | Absolute positioning | Select “鼠标模式 → 精准”; the touch position maps to the remote pointer position |
 | Relative movement | Select “增量” and slide on the video to move the pointer by relative displacement |
-| Left / right click | Position the pointer, then tap “左键” / “右键” on the virtual mouse |
+| Left / right click | Tap the video with one finger for left-click or two fingers for right-click; virtual “左键” / “右键” buttons also work |
 | Drag | Press and slide from the virtual “左键” button; release to finish dragging |
 | Scroll | Use ↑ / ↓ on the virtual mouse; hold for continuous scrolling |
 | Type keys | Tap ⌨ on the virtual mouse to open the virtual keyboard; tap × to close it |
@@ -195,7 +195,7 @@ All `Ms` values are in milliseconds. Interaction guards prevent browser actions 
 | “密码错误” (Incorrect password) | Use the host's current 6-character password; check whether it has been refreshed |
 | Connection timeout / no video | Check host screen capture permissions and SRTP, then STUN / TURN, dynamic credentials, and relay ports |
 | Video works but input or display switching fails | Check that the control data channel is open and the host has remote input permissions |
-| Tapping the video does not click on mobile | Touching video only moves the pointer; click with virtual “左键” / “右键” buttons |
+| Tapping the video does not click on mobile | Briefly tap and release one / two fingers for left / right click; sliding, holding, and pinching do not click. Virtual mouse buttons also work |
 | No sound | Check that the host provides an active audio track, then the audio button, site playback permissions, and local volume |
 | Configuration changed but old server still used | Verify override script order and deployment completion; force-refresh and inspect the downloaded HTML / JS |
 | Wrong fork URL or home-screen launch path | Check Pages Custom domain, `CNAME`, publishing directory, and the manifest's `start_url` |
@@ -211,18 +211,20 @@ All `Ms` values are in milliseconds. Interaction guards prevent browser actions 
 | [control.js](control.js) | Control protocol, physical / virtual input, pointer lock, and touch zoom |
 | [turn_credentials.js](turn_credentials.js) | TURN credential validation and ICE configuration generation |
 | [tests/turn_credentials_test.js](tests/turn_credentials_test.js) | TURN credential parser tests |
+| [tests/control_touch_test.js](tests/control_touch_test.js) | Touch click, movement, and zoom event regression tests |
 | [vendor/README.md](vendor/README.md) | WebRTC Adapter version and source |
 
 With Node.js installed, run the existing tests and syntax checks without installing dependencies:
 
 ```bash
 node tests/turn_credentials_test.js
+node tests/control_touch_test.js
 node --check web_client.js
 node --check control.js
 node --check turn_credentials.js
 ```
 
-These checks cover credential parsing and script syntax, not live connectivity, media, or input. After changing connection or touch logic, use a desktop host on the same service to verify direct / TURN connections, display switching, disconnect/reconnect behavior, and the relevant input devices.
+These checks cover credential parsing, simulated touch events, and script syntax, not live connectivity, media, or input. After changing connection or touch logic, use a desktop host on the same service to verify direct / TURN connections, display switching, disconnect/reconnect behavior, and the relevant input devices.
 
 WebRTC Adapter is pinned to **9.0.1**. The page first loads `vendor/adapter-9.0.1.min.js`, then falls back to the same version on jsDelivr if local loading fails. Include the `vendor` asset in deployments, and update the local file and [index.html](index.html) fallback together when changing versions.
 

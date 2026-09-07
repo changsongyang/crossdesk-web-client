@@ -19,6 +19,9 @@
     wheel_horizontal: 8,
   };
 
+  const TAP_MAX_DURATION = 300;
+  const TAP_MOVE_TOLERANCE = 10;
+
   const clamp01 = (value) => Math.max(0, Math.min(1, value));
   const isTextInput = (el) => {
     if (!el || !el.tagName) return false;
@@ -72,8 +75,7 @@
         gestureStart: null,
         isMobile: false,
         mobileControlMode: "absolute", // "absolute" or "relative"
-        touchActive: false,
-        touchStartPos: null,
+        touchGesture: null,
         touchLastPos: null,
         desktopPointerCalibrated: false,
         // Pinch zoom state
@@ -99,9 +101,9 @@
       this.onPointerCancel = this.onPointerCancel.bind(this);
       this.onWheel = this.onWheel.bind(this);
 
-      this.onTouchStartFallback = this.onTouchStartFallback.bind(this);
-      this.onTouchMoveFallback = this.onTouchMoveFallback.bind(this);
-      this.onTouchEndFallback = this.onTouchEndFallback.bind(this);
+      this.onTouchStart = this.onTouchStart.bind(this);
+      this.onTouchMove = this.onTouchMove.bind(this);
+      this.onTouchEnd = this.onTouchEnd.bind(this);
       this.onVirtualLeftStart = this.onVirtualLeftStart.bind(this);
       this.onVirtualRightStart = this.onVirtualRightStart.bind(this);
       this.onVirtualButtonMove = this.onVirtualButtonMove.bind(this);
@@ -118,10 +120,6 @@
         this.onKeyboardDragHandleTouchMove.bind(this);
       this.onKeyboardDragHandleTouchEnd =
         this.onKeyboardDragHandleTouchEnd.bind(this);
-
-      this.onPinchStart = this.onPinchStart.bind(this);
-      this.onPinchMove = this.onPinchMove.bind(this);
-      this.onPinchEnd = this.onPinchEnd.bind(this);
 
       this.init();
     }
@@ -283,25 +281,25 @@
       document.addEventListener("pointercancel", this.onPointerCancel);
       video.addEventListener("wheel", this.onWheel, { passive: false });
 
-      if (!window.PointerEvent) {
-        video.addEventListener("touchstart", this.onTouchStartFallback, {
-          passive: false,
-        });
-        document.addEventListener("touchmove", this.onTouchMoveFallback, {
-          passive: false,
-        });
-        document.addEventListener("touchend", this.onTouchEndFallback, {
-          passive: false,
-        });
-        document.addEventListener("touchcancel", this.onTouchEndFallback, {
-          passive: false,
-        });
-      }
-
-      // Pinch zoom will be set up in setupVirtualMouse() after isMobile is determined
+      // Use one touch stream for taps, pointer movement, and pinch zoom.
+      // Pointer events from the same fingers are ignored to avoid duplicate clicks.
+      video.addEventListener("touchstart", this.onTouchStart, {
+        passive: false,
+      });
+      document.addEventListener("touchmove", this.onTouchMove, {
+        passive: false,
+      });
+      document.addEventListener("touchend", this.onTouchEnd, {
+        passive: false,
+      });
+      document.addEventListener("touchcancel", this.onTouchEnd, {
+        passive: false,
+      });
     }
 
     onPointerDown(event) {
+      if (event.pointerType === "touch") return;
+
       const button = typeof event.button === "number" ? event.button : 0;
       if (button < 0) return;
 
@@ -322,50 +320,6 @@
 
       // Skip if dragging panel
       if (this.state.draggingPanel) {
-        return;
-      }
-
-      // 移动端模式下，触摸视频区域不触发点击事件，只移动鼠标位置
-      // Skip if pinch zoom is active
-      if (
-        this.state.isMobile &&
-        event.pointerType === "touch" &&
-        !this.state.pinchZoomActive
-      ) {
-        event.preventDefault?.();
-        this.ensureVideoRect();
-        if (
-          this.state.videoRect &&
-          this.isInsideVideo(event.clientX, event.clientY)
-        ) {
-          // 模式1：指哪打哪 - 直接设置鼠标位置
-          if (this.state.mobileControlMode === "absolute") {
-            this.updateNormalizedFromClient(event.clientX, event.clientY);
-            this.sendMouseAction({
-              x: this.state.normalizedPos.x,
-              y: this.state.normalizedPos.y,
-              flag: MouseFlag.move,
-            });
-          } else {
-            // 模式2：增量模式 - 记录起始位置
-            this.state.touchActive = true;
-            this.state.touchStartPos = { x: event.clientX, y: event.clientY };
-            this.state.touchLastPos = { x: event.clientX, y: event.clientY };
-          }
-        }
-        // Try to capture pointer, but handle errors gracefully
-        if (
-          this.elements.video &&
-          event.pointerId !== undefined &&
-          event.pointerId !== null
-        ) {
-          try {
-            this.elements.video.setPointerCapture(event.pointerId);
-          } catch (err) {
-            // Ignore errors (e.g., element not in document, pointer already captured, etc.)
-            // console.warn("setPointerCapture failed:", err);
-          }
-        }
         return;
       }
 
@@ -419,6 +373,8 @@
     }
 
     onPointerMove(event) {
+      if (event.pointerType === "touch") return;
+
       // Skip if touching panel elements
       const target = event.target;
       if (
@@ -441,65 +397,6 @@
 
       // Skip if pinch zoom is active
       if (this.state.pinchZoomActive) {
-        return;
-      }
-
-      // 移动端增量模式处理
-      if (
-        this.state.isMobile &&
-        event.pointerType === "touch" &&
-        this.state.touchActive &&
-        this.state.mobileControlMode === "relative"
-      ) {
-        event.preventDefault?.();
-        this.ensureVideoRect();
-        if (!this.state.videoRect || !this.state.touchLastPos) return;
-
-        const deltaX = event.clientX - this.state.touchLastPos.x;
-        const deltaY = event.clientY - this.state.touchLastPos.y;
-
-        // 计算增量（相对于视频尺寸）
-        const deltaXNormalized = deltaX / this.state.videoRect.width;
-        const deltaYNormalized = deltaY / this.state.videoRect.height;
-
-        // 更新鼠标位置（增量模式）
-        this.state.normalizedPos.x = clamp01(
-          this.state.normalizedPos.x + deltaXNormalized,
-        );
-        this.state.normalizedPos.y = clamp01(
-          this.state.normalizedPos.y + deltaYNormalized,
-        );
-
-        this.sendMouseAction({
-          x: this.state.normalizedPos.x,
-          y: this.state.normalizedPos.y,
-          flag: MouseFlag.move,
-        });
-
-        this.state.touchLastPos = { x: event.clientX, y: event.clientY };
-        return;
-      }
-
-      // 移动端指哪打哪模式处理
-      if (
-        this.state.isMobile &&
-        event.pointerType === "touch" &&
-        this.state.mobileControlMode === "absolute"
-      ) {
-        event.preventDefault?.();
-        this.ensureVideoRect();
-        if (
-          !this.state.videoRect ||
-          !this.isInsideVideo(event.clientX, event.clientY)
-        )
-          return;
-
-        this.updateNormalizedFromClient(event.clientX, event.clientY);
-        this.sendMouseAction({
-          x: this.state.normalizedPos.x,
-          y: this.state.normalizedPos.y,
-          flag: MouseFlag.move,
-        });
         return;
       }
 
@@ -551,18 +448,11 @@
     }
 
     onPointerUp(event) {
+      if (event.pointerType === "touch") return;
+
       // Skip if releasing inside panel area
       if (this.isInsidePanel(event.clientX, event.clientY)) {
         this.elements.video?.releasePointerCapture?.(event.pointerId ?? 0);
-        return;
-      }
-
-      // 移动端模式下，触摸结束不触发点击事件
-      if (this.state.isMobile && event.pointerType === "touch") {
-        this.elements.video?.releasePointerCapture?.(event.pointerId ?? 0);
-        this.state.touchActive = false;
-        this.state.touchStartPos = null;
-        this.state.touchLastPos = null;
         return;
       }
 
@@ -585,14 +475,9 @@
       });
     }
 
-    onPointerCancel() {
+    onPointerCancel(event) {
+      if (event.pointerType === "touch") return;
       this.state.lastPointerPos = null;
-      // 清理移动端触摸状态
-      if (this.state.isMobile) {
-        this.state.touchActive = false;
-        this.state.touchStartPos = null;
-        this.state.touchLastPos = null;
-      }
     }
 
     onWheel(event) {
@@ -637,134 +522,180 @@
       event.preventDefault();
     }
 
-    onTouchStartFallback(event) {
-      if (!event.touches?.length) return;
-
-      // Skip if touching panel elements
-      const target = event.target;
-      if (
-        target &&
-        (target.closest("#panel-collapsed-bar") ||
-          target.closest("#connected-panel"))
-      ) {
-        return;
-      }
-
-      const touch = event.touches[0];
-
-      // Skip if touching inside panel area
-      if (this.isInsidePanel(touch.clientX, touch.clientY)) {
-        return;
-      }
-
-      // Skip if pinch zoom is active, dragging panel, or if two touches (pinch gesture)
-      if (
-        this.state.pinchZoomActive ||
-        this.state.draggingPanel ||
-        event.touches.length === 2
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-
-      // 移动端模式下，触摸视频区域不触发点击事件
-      this.ensureVideoRect();
-      if (
-        this.state.videoRect &&
-        this.isInsideVideo(touch.clientX, touch.clientY)
-      ) {
-        if (this.state.mobileControlMode === "absolute") {
-          // 模式1：指哪打哪
-          this.updateNormalizedFromClient(touch.clientX, touch.clientY);
-          this.sendMouseAction({
-            x: this.state.normalizedPos.x,
-            y: this.state.normalizedPos.y,
-            flag: MouseFlag.move,
-          });
-        } else {
-          // 模式2：增量模式
-          this.state.touchActive = true;
-          this.state.touchStartPos = { x: touch.clientX, y: touch.clientY };
-          this.state.touchLastPos = { x: touch.clientX, y: touch.clientY };
-        }
-      }
-    }
-
-    onTouchMoveFallback(event) {
-      if (!event.touches?.length) return;
-
-      // Skip if touching panel elements
-      const target = event.target;
-      if (
-        target &&
-        (target.closest("#panel-collapsed-bar") ||
-          target.closest("#connected-panel"))
-      ) {
-        return;
-      }
-
-      const touch = event.touches[0];
-
-      // Skip if moving inside panel area
-      if (this.isInsidePanel(touch.clientX, touch.clientY)) {
-        return;
-      }
-
-      // Skip if pinch zoom is active, dragging panel, or if two touches (pinch gesture)
-      if (
-        this.state.pinchZoomActive ||
-        this.state.draggingPanel ||
-        event.touches.length === 2
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-
+    onTouchStart(event) {
+      if (!event.changedTouches?.length || this.isDraggingAnyElement()) return;
       this.ensureVideoRect();
       if (!this.state.videoRect) return;
 
-      if (this.state.mobileControlMode === "absolute") {
-        // 模式1：指哪打哪
-        if (this.isInsideVideo(touch.clientX, touch.clientY)) {
+      const touches = Array.from(event.changedTouches);
+      if (
+        touches.some((touch) =>
+          this.isInsidePanel(touch.clientX, touch.clientY) ||
+          !this.isInsideVideo(touch.clientX, touch.clientY),
+        )
+      ) {
+        if (this.state.touchGesture) this.state.touchGesture.cancelled = true;
+        return;
+      }
+
+      event.preventDefault();
+      if (!this.state.touchGesture) {
+        this.state.touchGesture = {
+          startedAt: Date.now(),
+          points: new Map(),
+          moved: false,
+          cancelled: this.state.gestureActive,
+        };
+        const touch = touches[0];
+        this.state.touchLastPos = { x: touch.clientX, y: touch.clientY };
+        if (this.state.mobileControlMode === "absolute") {
           this.updateNormalizedFromClient(touch.clientX, touch.clientY);
           this.sendMouseAction({
-            x: this.state.normalizedPos.x,
-            y: this.state.normalizedPos.y,
+            ...this.state.normalizedPos,
             flag: MouseFlag.move,
           });
         }
-      } else if (this.state.touchActive && this.state.touchLastPos) {
-        // 模式2：增量模式
-        const deltaX = touch.clientX - this.state.touchLastPos.x;
-        const deltaY = touch.clientY - this.state.touchLastPos.y;
-
-        const deltaXNormalized = deltaX / this.state.videoRect.width;
-        const deltaYNormalized = deltaY / this.state.videoRect.height;
-
-        this.state.normalizedPos.x = clamp01(
-          this.state.normalizedPos.x + deltaXNormalized,
-        );
-        this.state.normalizedPos.y = clamp01(
-          this.state.normalizedPos.y + deltaYNormalized,
-        );
-
-        this.sendMouseAction({
-          x: this.state.normalizedPos.x,
-          y: this.state.normalizedPos.y,
-          flag: MouseFlag.move,
+      }
+      const gesture = this.state.touchGesture;
+      for (const touch of touches) {
+        gesture.points.set(touch.identifier, {
+          x: touch.clientX,
+          y: touch.clientY,
         });
+      }
+      if (
+        gesture.points.size > 2 ||
+        Array.from(event.touches).some((touch) => !gesture.points.has(touch.identifier))
+      ) {
+        gesture.cancelled = true;
+      }
 
-        this.state.touchLastPos = { x: touch.clientX, y: touch.clientY };
+      if (gesture.points.size > 1) {
+        this.state.touchLastPos = null;
+        this.state.lastDoubleTapTime = 0;
+        this.onPinchStart(event);
       }
     }
 
-    onTouchEndFallback(event) {
-      // 移动端模式下，触摸结束不触发点击事件
-      this.state.touchActive = false;
-      this.state.touchStartPos = null;
+    updateTouchGesture(touches) {
+      const gesture = this.state.touchGesture;
+      if (!gesture) return;
+      for (const touch of Array.from(touches)) {
+        const start = gesture.points.get(touch.identifier);
+        if (!start) {
+          gesture.cancelled = true;
+          continue;
+        }
+        if (
+          Math.hypot(touch.clientX - start.x, touch.clientY - start.y) >
+          TAP_MOVE_TOLERANCE
+        ) {
+          gesture.moved = true;
+          gesture.cancelled = true;
+        }
+        if (
+          this.isInsidePanel(touch.clientX, touch.clientY) ||
+          !this.isInsideVideo(touch.clientX, touch.clientY)
+        ) {
+          gesture.cancelled = true;
+        }
+      }
+      if (this.isDraggingAnyElement() || this.state.gestureActive) {
+        gesture.cancelled = true;
+      }
+    }
+
+    onTouchMove(event) {
+      const gesture = this.state.touchGesture;
+      if (!gesture) return;
+      event.preventDefault();
+      this.ensureVideoRect();
+      if (!this.state.videoRect) return;
+      this.updateTouchGesture(event.touches);
+
+      // Do not resume single-finger movement until every finger has lifted.
+      if (gesture.points.size > 1) {
+        if (
+          gesture.moved && event.touches.length === 2 &&
+          Array.from(event.touches).every((touch) => gesture.points.has(touch.identifier))
+        ) {
+          this.onPinchMove(event);
+        }
+        return;
+      }
+
+      const touch = Array.from(event.touches).find((touch) =>
+        gesture.points.has(touch.identifier),
+      );
+      if (
+        !touch || this.isDraggingAnyElement() ||
+        this.isInsidePanel(touch.clientX, touch.clientY)
+      ) return;
+
+      if (this.state.mobileControlMode === "absolute") {
+        if (!this.isInsideVideo(touch.clientX, touch.clientY)) return;
+        this.updateNormalizedFromClient(touch.clientX, touch.clientY);
+      } else if (this.state.touchLastPos) {
+        const deltaX = touch.clientX - this.state.touchLastPos.x;
+        const deltaY = touch.clientY - this.state.touchLastPos.y;
+        this.state.normalizedPos.x = clamp01(
+          this.state.normalizedPos.x + deltaX / this.state.videoRect.width,
+        );
+        this.state.normalizedPos.y = clamp01(
+          this.state.normalizedPos.y + deltaY / this.state.videoRect.height,
+        );
+      }
+      this.state.touchLastPos = { x: touch.clientX, y: touch.clientY };
+      this.sendMouseAction({ ...this.state.normalizedPos, flag: MouseFlag.move });
+    }
+
+    onTouchEnd(event) {
+      const gesture = this.state.touchGesture;
+      if (!gesture) return;
+      this.ensureVideoRect();
+      this.updateTouchGesture(event.changedTouches);
+      if (!Array.from(event.changedTouches).some((touch) =>
+        gesture.points.has(touch.identifier),
+      )) return;
+
+      event.preventDefault();
+      this.updateTouchGesture(event.touches);
+      if (event.type === "touchcancel") gesture.cancelled = true;
+      this.onPinchEnd(event);
+      if (Array.from(event.touches).some((touch) =>
+        gesture.points.has(touch.identifier),
+      )) return;
+
+      this.state.touchGesture = null;
       this.state.touchLastPos = null;
+      const now = Date.now();
+      if (gesture.cancelled || now - gesture.startedAt > TAP_MAX_DURATION) {
+        this.state.lastDoubleTapTime = 0;
+        return;
+      }
+
+      // Wait for all fingers so a two-finger tap never sends a left click first.
+      const button = gesture.points.size === 2 ? 2 : 0;
+      this.sendMouseAction({
+        ...this.state.normalizedPos,
+        flag: this.buttonToFlag(button, true),
+      });
+      this.sendMouseAction({
+        ...this.state.normalizedPos,
+        flag: this.buttonToFlag(button, false),
+      });
+
+      if (button === 0) {
+        if (
+          this.state.lastDoubleTapTime &&
+          now - this.state.lastDoubleTapTime < 300
+        ) {
+          this.resetZoom();
+          this.state.lastDoubleTapTime = 0;
+        } else {
+          this.state.lastDoubleTapTime = now;
+        }
+      }
     }
 
     buttonToFlag(button, isDown) {
@@ -1071,23 +1002,6 @@
         this.elements.virtualMouseRestore.addEventListener("click", (e) => {
           e.stopPropagation();
           this.restoreVirtualMouse();
-        });
-      }
-
-      // Add pinch zoom support for mobile devices (after isMobile is set)
-      if (this.state.isMobile && this.elements.video) {
-        const video = this.elements.video;
-        video.addEventListener("touchstart", this.onPinchStart, {
-          passive: false,
-        });
-        document.addEventListener("touchmove", this.onPinchMove, {
-          passive: false,
-        });
-        document.addEventListener("touchend", this.onPinchEnd, {
-          passive: false,
-        });
-        document.addEventListener("touchcancel", this.onPinchEnd, {
-          passive: false,
         });
       }
     }
@@ -1793,21 +1707,6 @@
         this.state.initialPinchCenter = this.getTouchCenter(touch1, touch2);
         this.state.initialTranslateX = this.state.currentTranslateX;
         this.state.initialTranslateY = this.state.currentTranslateY;
-        // Clear single touch state to prevent mouse events
-        this.state.touchActive = false;
-        this.state.touchStartPos = null;
-        this.state.touchLastPos = null;
-      } else if (event.touches.length === 1 && !this.state.pinchZoomActive) {
-        // Single touch - check for double tap to reset zoom
-        const now = Date.now();
-        if (now - this.state.lastDoubleTapTime < 300) {
-          // Double tap detected - reset zoom
-          event.preventDefault();
-          this.resetZoom();
-          this.state.lastDoubleTapTime = 0;
-        } else {
-          this.state.lastDoubleTapTime = now;
-        }
       }
     }
 
@@ -1905,8 +1804,7 @@
         this.state.pinchZoomActive = false;
         this.state.initialPinchDistance = 0;
         this.state.initialPinchCenter = null;
-        // Don't prevent default for single touch after pinch ends
-        // This allows normal touch handling to resume
+        // The touch gesture remains tracked until the last finger lifts.
       }
     }
 
